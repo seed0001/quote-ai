@@ -13,7 +13,7 @@ const DEFAULT_SETTINGS = {
   defaultMarkupPercent: 20.0,
   defaultTaxPercent: 8.25,
   openRouterKey: '',
-  openRouterModel: 'google/gemini-2.5-flash',
+  openRouterModel: 'openrouter/auto',
 };
 
 const MOCK_CLIENTS = [

@@ -11,11 +11,40 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
   const [defaultLaborRate, setDefaultLaborRate] = useState(settings.defaultLaborRate || 85);
   const [defaultMarkupPercent, setDefaultMarkupPercent] = useState(settings.defaultMarkupPercent || 20);
   const [defaultTaxPercent, setDefaultTaxPercent] = useState(settings.defaultTaxPercent || 8.25);
+  const PRESET_MODELS = [
+    'openrouter/auto',
+    'google/gemini-2.5-flash:free',
+    'meta-llama/llama-3-8b-instruct:free',
+    'meta-llama/llama-3.3-70b-instruct',
+    'deepseek/deepseek-r1',
+    'anthropic/claude-3.5-sonnet',
+    'google/gemini-2.5-pro'
+  ];
+
+  const initialModel = settings.openRouterModel || 'openrouter/auto';
+  const isPreset = PRESET_MODELS.includes(initialModel);
+
   const [openRouterKey, setOpenRouterKey] = useState(settings.openRouterKey || '');
-  const [openRouterModel, setOpenRouterModel] = useState(settings.openRouterModel || 'google/gemini-2.5-flash');
+  const [openRouterModel, setOpenRouterModel] = useState(initialModel);
+  const [selectedPreset, setSelectedPreset] = useState(isPreset ? initialModel : 'custom');
+  const [customModelText, setCustomModelText] = useState(isPreset ? 'openrouter/free' : initialModel);
   
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [importStatus, setImportStatus] = useState({ type: '', message: '' });
+
+  const handlePresetChange = (val) => {
+    setSelectedPreset(val);
+    if (val === 'custom') {
+      setOpenRouterModel(customModelText || 'openrouter/free');
+    } else {
+      setOpenRouterModel(val);
+    }
+  };
+
+  const handleCustomTextChange = (val) => {
+    setCustomModelText(val);
+    setOpenRouterModel(val);
+  };
 
   const handleSave = (e) => {
     e.preventDefault();
@@ -202,15 +231,37 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
               <label className="form-label">Preferred LLM Model</label>
               <select 
                 className="input-field"
-                value={openRouterModel}
-                onChange={(e) => setOpenRouterModel(e.target.value)}
+                value={selectedPreset}
+                onChange={(e) => handlePresetChange(e.target.value)}
               >
-                <option value="google/gemini-2.5-flash">Google Gemini 2.5 Flash (Recommended)</option>
-                <option value="meta-llama/llama-3.3-70b-instruct">Meta Llama 3.3 70B</option>
-                <option value="anthropic/claude-3.5-sonnet">Anthropic Claude 3.5 Sonnet</option>
-                <option value="deepseek/deepseek-chat">DeepSeek V3</option>
+                <option value="openrouter/auto">OpenRouter Auto-Router (Free/Cheap Auto)</option>
+                <option value="google/gemini-2.5-flash:free">Google Gemini 2.5 Flash (Free Endpoint)</option>
+                <option value="meta-llama/llama-3-8b-instruct:free">Meta Llama 3 8B (Free Endpoint)</option>
+                <option value="meta-llama/llama-3.3-70b-instruct">Meta Llama 3.3 70B (High Precision)</option>
+                <option value="deepseek/deepseek-r1">DeepSeek R1 (Premium Reasoning)</option>
+                <option value="anthropic/claude-3.5-sonnet">Anthropic Claude 3.5 Sonnet (Premium)</option>
+                <option value="google/gemini-2.5-pro">Google Gemini 2.5 Pro (Premium)</option>
+                <option value="custom">Other / Custom Model...</option>
               </select>
             </div>
+
+            {selectedPreset === 'custom' && (
+              <div className="form-group">
+                <label className="form-label">Custom OpenRouter Model Identifier</label>
+                <input 
+                  type="text" 
+                  className="input-field" 
+                  placeholder="e.g. openrouter/free or mistralai/mistral-7b-instruct:free"
+                  value={customModelText}
+                  onChange={(e) => handleCustomTextChange(e.target.value)}
+                  style={{ fontFamily: 'var(--font-mono)' }}
+                  required
+                />
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  Input any model identifier from OpenRouter (e.g. <code>openrouter/free</code>).
+                </div>
+              </div>
+            )}
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginTop: '24px' }}>
               <button type="submit" className="btn btn-primary">
