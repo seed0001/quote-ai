@@ -13,6 +13,10 @@ dist-ssr
 *.local
 .quote-flow-host-config.json
 
+# Shared business data lives on the host machine, never in the repo
+quote-flow-data/
+CLOUDFLARE_TUNNEL.log
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

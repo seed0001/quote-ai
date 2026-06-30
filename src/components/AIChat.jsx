@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, Mic, MicOff, Send, Volume2, VolumeX, Database, Trash2, BrainCircuit, ChevronDown } from 'lucide-react';
+import { Sparkles, Mic, MicOff, Send, Volume2, VolumeX, Database, Trash2, BrainCircuit, ChevronDown, Globe } from 'lucide-react';
 import { dispatchNLPActions } from '../utils/dataStore';
 import { runAgent, buildContext } from '../utils/aiEngine';
 import { generateFishSpeech } from '../utils/fishAudio';
@@ -488,6 +488,10 @@ export default function AIChat({
               {loadingPhase === 'executing' ? (
                 <>
                   <Database size={12} className="animate-spin" style={{ color: 'var(--accent)' }} /> Plan approved — executing actions & updating your database...
+                </>
+              ) : loadingPhase === 'searching' ? (
+                <>
+                  <Globe size={12} className="animate-spin" style={{ color: 'var(--accent)' }} /> Searching the web for the latest information...
                 </>
               ) : (
                 <>

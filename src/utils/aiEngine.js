@@ -91,8 +91,24 @@ export function buildContext({ projects, clients, catalog, activeProjectId, curr
   };
 }
 
+// Render any web research already gathered this turn so the model uses it
+// instead of asking to search again.
+function researchSection(research) {
+  if (!research || research.length === 0) return '';
+  const blocks = research.map(({ query, results, error }) => {
+    if (error) return `Search "${query}": (failed — ${error})`;
+    if (!results || results.length === 0) return `Search "${query}": (no results)`;
+    const lines = results
+      .slice(0, 5)
+      .map((r, i) => `  ${i + 1}. ${r.title} — ${r.snippet} [${r.url}]`)
+      .join('\n');
+    return `Search "${query}":\n${lines}`;
+  });
+  return `\nWeb research already performed this turn (use these findings; do not repeat the same searches):\n${blocks.join('\n')}\n`;
+}
+
 // PASS 1 prompt — reasoning only, no execution.
-function reasoningPrompt(context) {
+function reasoningPrompt(context, research = []) {
   return `You are the reasoning core for QuoteFlow, a flexible quoting and project workspace for any line of business.
 In THIS step your only job is to THINK. You do NOT execute anything and you do NOT touch the database.
 
@@ -103,37 +119,40 @@ This is an ongoing conversation. The prior messages are your memory of it — re
 
 Current Application Context:
 ${JSON.stringify(context, null, 2)}
-
+${researchSection(research)}
 Reason carefully about the user's latest message:
 - What are they actually trying to accomplish?
 - What do you already know (from the context and the conversation) versus what is genuinely missing?
 - For QUOTES especially, do NOT guess line items blindly. Decide whether you have enough scope to build a reliable estimate. Relevant details depend on the configured business, but commonly include deliverables or products, quantities, project sections or phases, service time, quality tier, deadlines, exclusions, and special requirements.
 - PRICING IS NOT GUESSWORK. Product, service, fee, rental, or other unit prices MUST come from the priceCatalog, or from a price the user explicitly stated. If a needed item is not in the catalog and no price was provided, CLARIFY. Never invent a unit price.
 - TIME is the exception: you MAY estimate labor or service hours from relevant domain knowledge when reasonable. If the business does not bill by time, use zero hours.
+- WEB SEARCH: you may search the internet when you genuinely need current or external information that is NOT in the context or conversation — e.g. product specifications, building codes, vendor lookups, or general facts. Do NOT search for things already known, and remember a unit price still must come from the catalog or the user (a searched figure is only a reference, not an authoritative catalog price).
 - If important details or any required unit price are missing, CLARIFY rather than act.
 - If you have enough to proceed, outline a concrete, ordered plan describing each database action to take.
 
 Return a STRICT JSON object with exactly these fields:
 {
   "reasoning": "your concise step-by-step analysis (a few sentences)",
-  "decision": "ACT" or "CLARIFY",
+  "decision": "ACT" or "CLARIFY" or "SEARCH",
   "plan": ["ordered, plain-language steps describing each action to take"],
-  "clarifyingQuestion": "one or two focused questions for the user"
+  "clarifyingQuestion": "one or two focused questions for the user",
+  "searchQueries": ["1 to 3 concise web search queries"]
 }
-When decision is "CLARIFY": "plan" must be [] and put your question(s) in "clarifyingQuestion".
-When decision is "ACT": "clarifyingQuestion" must be "" and "plan" must list the steps.
+When decision is "SEARCH": "plan" must be [], "clarifyingQuestion" must be "", and "searchQueries" must list 1-3 queries. You will be given the results and asked to decide again.
+When decision is "CLARIFY": "plan" must be [], "searchQueries" must be [], and put your question(s) in "clarifyingQuestion".
+When decision is "ACT": "clarifyingQuestion" must be "", "searchQueries" must be [], and "plan" must list the steps.
 Ask for the most important missing details first — one or two questions, not a long interrogation.
 Do not wrap the JSON in markdown code blocks.`;
 }
 
 // PASS 2 prompt — execute the approved plan into strict action JSON.
-function executionPrompt(context, plan, reasoning) {
+function executionPrompt(context, plan, reasoning, research = []) {
   const planText = (plan || []).map((s, i) => `${i + 1}. ${s}`).join('\n') || '(no explicit steps provided)';
   return `You are the execution core for QuoteFlow. A planning step has already reasoned about the user's request and approved a plan. Your job is to translate that plan into precise, schema-correct database actions plus a short spoken confirmation.
 
 Current Application Context:
 ${JSON.stringify(context, null, 2)}
-
+${researchSection(research)}
 Planning notes:
 ${reasoning || '(none)'}
 
@@ -323,6 +342,27 @@ function actionRejectionReason(action, clientIds, projectIds, catalogIds) {
   }
 }
 
+// Run the model's requested web searches through the host search proxy.
+// Returns [{ query, results: [{title, url, snippet}], error }].
+async function webSearch(queries) {
+  const unique = [...new Set((queries || []).map(q => String(q || '').trim()).filter(Boolean))].slice(0, 3);
+  const found = [];
+  for (const query of unique) {
+    try {
+      const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+      const data = await response.json().catch(() => ({}));
+      found.push({
+        query,
+        results: Array.isArray(data.results) ? data.results : [],
+        error: response.ok ? null : (data.error || `search failed (${response.status})`)
+      });
+    } catch (e) {
+      found.push({ query, results: [], error: e.message });
+    }
+  }
+  return found;
+}
+
 // Deterministic gate: validate every proposed action against the DB context.
 export function validateActions(actions, context) {
   const valid = [];
@@ -350,14 +390,32 @@ export function validateActions(actions, context) {
 //   onPhase('reasoning'|'executing') is an optional callback for staged UI.
 // Returns { decision, reasoning, actions, response, rejected }.
 export async function runAgent({ userMessage, history, context, settings, onPhase }) {
-  // PASS 1 — reason & plan.
+  // PASS 1 — reason & plan, with up to MAX_SEARCH_ROUNDS of autonomous web
+  // search. Each round the model may answer "SEARCH"; we run the queries, feed
+  // the findings back, and let it reason again before it settles on ACT/CLARIFY.
+  const MAX_SEARCH_ROUNDS = 2;
+  const research = [];
+  let planning;
+
   onPhase?.('reasoning');
-  const planning = await callOpenRouter({
-    systemPrompt: reasoningPrompt(context),
-    history,
-    userMessage,
-    settings
-  });
+  for (let round = 0; ; round++) {
+    planning = await callOpenRouter({
+      systemPrompt: reasoningPrompt(context, research),
+      history,
+      userMessage,
+      settings
+    });
+
+    const wantsSearch = String(planning.decision || '').toUpperCase() === 'SEARCH';
+    const queries = Array.isArray(planning.searchQueries) ? planning.searchQueries : [];
+    if (wantsSearch && queries.length > 0 && round < MAX_SEARCH_ROUNDS) {
+      onPhase?.('searching');
+      research.push(...await webSearch(queries));
+      onPhase?.('reasoning');
+      continue;
+    }
+    break;
+  }
 
   const decision = String(planning.decision || '').toUpperCase() === 'ACT' ? 'ACT' : 'CLARIFY';
   const reasoning = planning.reasoning || '';
@@ -377,7 +435,7 @@ export async function runAgent({ userMessage, history, context, settings, onPhas
   onPhase?.('executing');
   const plan = Array.isArray(planning.plan) ? planning.plan : [];
   const execResult = await callOpenRouter({
-    systemPrompt: executionPrompt(context, plan, reasoning),
+    systemPrompt: executionPrompt(context, plan, reasoning, research),
     history,
     userMessage,
     settings

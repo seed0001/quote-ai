@@ -23,7 +23,8 @@ import {
   saveClients,
   saveSettings,
   saveCatalog,
-  initDataStore
+  initDataStore,
+  hydrateFromHost
 } from './utils/dataStore';
 import Dashboard from './components/Dashboard';
 import ClientDirectory from './components/ClientDirectory';
@@ -47,12 +48,19 @@ export default function App() {
 
   // Initialize and load data
   useEffect(() => {
+    // Seed synchronously from the local fallback, then pull the authoritative
+    // shared data from the host computer so every employee sees the same records.
     initDataStore();
     setProjects(getProjects());
     setClients(getClients());
+    setCatalog(getCatalog());
+    hydrateFromHost().then(() => {
+      setProjects(getProjects());
+      setClients(getClients());
+      setCatalog(getCatalog());
+    });
     const localSettings = getSettings();
     setSettings(localSettings);
-    setCatalog(getCatalog());
 
     const loadHostedConfiguration = async () => {
       try {

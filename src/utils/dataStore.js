@@ -1,6 +1,9 @@
 import { DEFAULT_CATALOG } from './catalogSeed';
 
-// LocalStorage Keys
+// LocalStorage Keys — now used only as an OFFLINE FALLBACK mirror. The shared
+// source of truth for projects/clients/catalog lives on the host computer and
+// is served by the /api/data endpoints (see vite.config.js). Settings continue
+// to flow through /api/host-config.
 const PROJECTS_KEY = 'quote_ai_projects';
 const CLIENTS_KEY = 'quote_ai_clients';
 const SETTINGS_KEY = 'quote_ai_settings';
@@ -29,213 +32,115 @@ const DEFAULT_SETTINGS = {
   fishVoiceName: '',
 };
 
-const MOCK_CLIENTS = [
-  {
-    id: 'c-1',
-    name: 'Sarah Jenkins',
-    company: '',
-    email: 'sarah.jenkins@gmail.com',
-    phone: '(512) 555-0143',
-    address: '1204 Pine Street, Austin, TX 78704',
-    notes: 'Prefers communication via email. High attention to detail. Budget-conscious but values quality materials.',
-  },
-  {
-    id: 'c-2',
-    name: 'David and Linda Miller',
-    company: '',
-    email: 'miller.david@outlook.com',
-    phone: '(512) 555-8822',
-    address: '4308 Westlake Dr, Austin, TX 78746',
-    notes: 'Lakefront home. Full master bath remodel. Interested in high-end stone finishes and custom steam shower.',
-  },
-  {
-    id: 'c-3',
-    name: 'Marcus Vance',
-    company: 'Vance Properties LLC',
-    email: 'marcus@vanceproperties.com',
-    phone: '(512) 555-3091',
-    address: '702 Congress Ave, Austin, TX 78701',
-    notes: 'Real estate investor. Fast-paced. Doing a kitchen and partial floor remodel to prep property for rental.',
-  },
-];
+// ---------------------------------------------------------------------------
+// Host-backed store with an in-memory cache.
+//
+// The rest of the app calls getProjects()/saveProjects() synchronously, so we
+// keep a live cache that is hydrated once from the host at startup. Reads return
+// the cache; writes update the cache, mirror to localStorage (offline backup),
+// and push the change to the host. Whole-array saves are diffed down to
+// per-record POST/PUT/DELETE calls so two employees editing at once don't
+// clobber each other's records.
+// ---------------------------------------------------------------------------
+const cache = { projects: [], clients: [], catalog: [] };
+const LOCAL_KEYS = { projects: PROJECTS_KEY, clients: CLIENTS_KEY, catalog: CATALOG_KEY };
 
-const MOCK_PROJECTS = [
-  {
-    id: 'p-1',
-    name: 'Modern Master Suite Renovation',
-    clientId: 'c-2',
-    status: 'progress',
-    startDate: '2026-06-15',
-    endDate: '2026-07-20',
-    laborRate: 90.00,
-    markupPercent: 25.0,
-    taxPercent: 8.25,
-    rooms: [
-      {
-        name: 'Master Bathroom',
-        items: [
-          { id: 'i-1', category: 'Demolition', name: 'Remove existing vanity, toilet, garden tub, & wall tile', unit: 'each', quantity: 1, materialCost: 20.00, laborHours: 12.00 },
-          { id: 'i-2', category: 'Plumbing', name: 'Rough-in supply & drain lines for double vanity and steam shower', unit: 'each', quantity: 1, materialCost: 450.00, laborHours: 16.00 },
-          { id: 'i-3', category: 'Tile & Stone', name: 'Install marble wall tile in shower enclosure (waterproof backing)', unit: 'sq ft', quantity: 140, materialCost: 9.50, laborHours: 1.20 },
-          { id: 'i-4', category: 'Tile & Stone', name: 'Install heated tile floor underlayment & porcelain tile', unit: 'sq ft', quantity: 85, materialCost: 6.00, laborHours: 0.80 },
-          { id: 'i-5', category: 'Electrical', name: 'Run new circuit for floor heating & steam shower generator', unit: 'each', quantity: 2, materialCost: 150.00, laborHours: 4.50 },
-          { id: 'i-6', category: 'Cabinets & Tops', name: 'Install custom double vanity cabinet + quartz countertop', unit: 'each', quantity: 1, materialCost: 1850.00, laborHours: 4.00 }
-        ]
-      },
-      {
-        name: 'Master Closet Walk-In',
-        items: [
-          { id: 'i-7', category: 'Drywall', name: 'Repair ceiling drywall and patch wall finishes', unit: 'sq ft', quantity: 45, materialCost: 0.85, laborHours: 0.15 },
-          { id: 'i-8', category: 'Painting', name: 'Prime and paint walls and ceiling (2 coats semi-gloss)', unit: 'sq ft', quantity: 300, materialCost: 0.40, laborHours: 0.05 },
-          { id: 'i-9', category: 'Trim & Finish', name: 'Install modular custom shelving & storage system', unit: 'each', quantity: 1, materialCost: 1200.00, laborHours: 8.00 }
-        ]
-      }
-    ],
-    changeOrders: [
-      {
-        id: 'co-1',
-        title: 'Add Backlit LED Vanity Mirrors & Extra Outlet',
-        description: 'Client requested upgraded backlit mirrors requiring dedicated electrical wiring behind the vanity wall.',
-        status: 'approved',
-        date: '2026-06-22',
-        items: [
-          { id: 'coi-1', category: 'Electrical', name: 'Wiring and mounting for 2 backlit mirrors', unit: 'each', quantity: 2, materialCost: 110.00, laborHours: 2.00 },
-          { id: 'coi-2', category: 'Electrical', name: 'Install extra outlet inside vanity cabinet', unit: 'each', quantity: 1, materialCost: 45.00, laborHours: 1.50 }
-        ]
-      },
-      {
-        id: 'co-2',
-        title: 'Subfloor Dry Rot Remediation',
-        description: 'Discovered significant dry rot beneath the old tub decking. Requires framing joist sistering and subfloor replacement before tiling.',
-        status: 'pending',
-        date: '2026-06-28',
-        items: [
-          { id: 'coi-3', category: 'Framing', name: 'Replace damaged floor joist sections & lay new plywood subfloor', unit: 'sq ft', quantity: 24, materialCost: 6.50, laborHours: 0.50 }
-        ]
-      }
-    ],
-    checklists: [
-      { id: 'ck-1', text: 'Permit pulled & posted on site', completed: true },
-      { id: 'ck-2', text: 'Demolition & haul away complete', completed: true },
-      { id: 'ck-3', text: 'Rough plumbing inspection passed', completed: true },
-      { id: 'ck-4', text: 'Rough electrical inspection passed', completed: true },
-      { id: 'ck-5', text: 'Shower waterproofing membrane water-tested (24hr test)', completed: true },
-      { id: 'ck-6', text: 'Install tile shower walls', completed: false },
-      { id: 'ck-7', text: 'Drywall repairs & closet cabinet installation', completed: false },
-      { id: 'ck-8', text: 'Trim, paint, & light fixture finish out', completed: false }
-    ],
-    photos: [
-      {
-        id: 'ph-1',
-        url: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200"><rect width="100%" height="100%" fill="%231a202c"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%23718096" font-family="sans-serif" font-size="14">Demolition Stage - Garden Tub Removed</text></svg>',
-        title: 'Bathroom Demolition complete',
-        phase: 'Demolition',
-        date: '2026-06-16'
-      },
-      {
-        id: 'ph-2',
-        url: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200"><rect width="100%" height="100%" fill="%231a202c"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" fill="%23718096" font-family="sans-serif" font-size="14">Shower Framing & Rough-In Plumbing</text></svg>',
-        title: 'Shower plumbing rough-in',
-        phase: 'Plumbing',
-        date: '2026-06-19'
-      }
-    ]
-  },
-  {
-    id: 'p-2',
-    name: 'Mid-Century Kitchen Makeover',
-    clientId: 'c-1',
-    status: 'quoting',
-    startDate: '2026-08-10',
-    endDate: '2026-08-28',
-    laborRate: 85.00,
-    markupPercent: 20.0,
-    taxPercent: 8.25,
-    rooms: [
-      {
-        name: 'Kitchen Main Area',
-        items: [
-          { id: 'i-10', category: 'Demolition', name: 'Tear out non-bearing load kitchen wall partitioning dining room', unit: 'each', quantity: 1, materialCost: 50.00, laborHours: 8.00 },
-          { id: 'i-11', category: 'Cabinets & Tops', name: 'Install flat panel walnut cabinetry (uppers & lowers)', unit: 'each', quantity: 14, materialCost: 320.00, laborHours: 1.50 },
-          { id: 'i-12', category: 'Cabinets & Tops', name: 'Terrazzo solid countertop slabs fabrication & install', unit: 'each', quantity: 1, materialCost: 3800.00, laborHours: 0.00 }, // Subcontracted cost included in material
-          { id: 'i-13', category: 'Electrical', name: 'Re-wire kitchen outlets for GFCI and run dedicated lines for oven', unit: 'each', quantity: 1, materialCost: 350.00, laborHours: 12.00 },
-          { id: 'i-14', category: 'Tile & Stone', name: 'Tile kitchen backsplash (ceramic stacked tiles)', unit: 'sq ft', quantity: 48, materialCost: 5.50, laborHours: 0.60 }
-        ]
-      }
-    ],
-    changeOrders: [],
-    checklists: [
-      { id: 'ck-9', text: 'Sign master contract & collect deposit', completed: false },
-      { id: 'ck-10', text: 'Order walnut cabinetry & terrazzo slab', completed: true },
-      { id: 'ck-11', text: 'Schedule framing subcontractor for wall opening inspection', completed: false }
-    ],
-    photos: []
-  },
-  {
-    id: 'p-3',
-    name: 'Rental Condo Interior Re-fresh',
-    clientId: 'c-3',
-    status: 'lead',
-    startDate: '',
-    endDate: '',
-    laborRate: 80.00,
-    markupPercent: 15.0,
-    taxPercent: 8.25,
-    rooms: [
-      {
-        name: 'Entire Condo',
-        items: [
-          { id: 'i-15', category: 'Demolition', name: 'Pull carpet in living room and bedrooms', unit: 'sq ft', quantity: 950, materialCost: 0.00, laborHours: 0.03 },
-          { id: 'i-16', category: 'Trim & Finish', name: 'Install Luxury Vinyl Plank (LVP) flooring + underlayment', unit: 'sq ft', quantity: 950, materialCost: 3.20, laborHours: 0.08 },
-          { id: 'i-17', category: 'Painting', name: 'Full paint of interior walls, doors, trim (flat white)', unit: 'sq ft', quantity: 2400, materialCost: 0.35, laborHours: 0.04 }
-        ]
-      }
-    ],
-    changeOrders: [],
-    checklists: [],
-    photos: []
+const mirrorLocal = (name) => {
+  try {
+    localStorage.setItem(LOCAL_KEYS[name], JSON.stringify(cache[name]));
+  } catch (e) {
+    console.error(`Unable to mirror ${name} to local fallback`, e);
   }
-];
+};
 
-// INITIALIZATION
+const readLocal = (key) => {
+  try {
+    const value = JSON.parse(localStorage.getItem(key));
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+};
+
+// Fire-and-forget host write. The localStorage mirror is already updated, so a
+// transient host hiccup never loses the user's input locally.
+const hostWrite = (method, suffix, body) => {
+  fetch(`/api/data${suffix}`, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  }).catch((e) => console.error(`Host save failed (${method} ${suffix})`, e));
+};
+
+const postRecord = (name, record) => hostWrite('POST', `/${name}`, record);
+const putRecord = (name, record) => hostWrite('PUT', `/${name}/${record.id}`, record);
+const removeRecord = (name, id) => hostWrite('DELETE', `/${name}/${id}`);
+
+// Turn a whole-collection replacement into the minimal set of per-record calls.
+const syncCollection = (name, prev, next) => {
+  const prevById = new Map(prev.map((r) => [r.id, r]));
+  const nextById = new Map(next.map((r) => [r.id, r]));
+  next.forEach((record) => {
+    const old = prevById.get(record.id);
+    if (!old) postRecord(name, record);
+    else if (JSON.stringify(old) !== JSON.stringify(record)) putRecord(name, record);
+  });
+  prev.forEach((record) => {
+    if (!nextById.has(record.id)) removeRecord(name, record.id);
+  });
+};
+
+const setCollection = (name, next) => {
+  syncCollection(name, cache[name], next);
+  cache[name] = next;
+  mirrorLocal(name);
+};
+
+// INITIALIZATION — seed the cache synchronously from the local fallback so the
+// synchronous getters work even before the async host hydrate resolves.
 export const initDataStore = () => {
-  if (!localStorage.getItem(PROJECTS_KEY)) {
-    localStorage.setItem(PROJECTS_KEY, JSON.stringify([]));
-  }
-  if (!localStorage.getItem(CLIENTS_KEY)) {
-    localStorage.setItem(CLIENTS_KEY, JSON.stringify([]));
-  }
+  cache.projects = readLocal(PROJECTS_KEY);
+  cache.clients = readLocal(CLIENTS_KEY);
+  cache.catalog = readLocal(CATALOG_KEY);
   if (!localStorage.getItem(SETTINGS_KEY)) {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify(DEFAULT_SETTINGS));
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(DEFAULT_SETTINGS));
+    } catch (e) {
+      console.error('Unable to seed default settings', e);
+    }
   }
-  if (!localStorage.getItem(CATALOG_KEY)) {
-    localStorage.setItem(CATALOG_KEY, JSON.stringify([]));
+};
+
+// Pull the authoritative shared data from the host into the cache. Call once at
+// startup (and await it before rendering). Falls back to the local mirror when
+// the host is unreachable so the app still functions offline.
+export const hydrateFromHost = async () => {
+  try {
+    const response = await fetch('/api/data', { cache: 'no-store' });
+    if (!response.ok) throw new Error(`Host data unavailable (${response.status})`);
+    const data = await response.json();
+    cache.projects = Array.isArray(data.projects) ? data.projects : [];
+    cache.clients = Array.isArray(data.clients) ? data.clients : [];
+    cache.catalog = Array.isArray(data.catalog) ? data.catalog : [];
+    mirrorLocal('projects');
+    mirrorLocal('clients');
+    mirrorLocal('catalog');
+    return true;
+  } catch (e) {
+    console.error('Host unreachable — using local fallback data.', e);
+    initDataStore();
+    return false;
   }
 };
 
 // GETTERS
-export const getProjects = () => {
-  initDataStore();
-  try {
-    return JSON.parse(localStorage.getItem(PROJECTS_KEY));
-  } catch (e) {
-    console.error('Error parsing projects data', e);
-    return [];
-  }
-};
+export const getProjects = () => cache.projects;
 
-export const getClients = () => {
-  initDataStore();
-  try {
-    return JSON.parse(localStorage.getItem(CLIENTS_KEY));
-  } catch (e) {
-    console.error('Error parsing clients data', e);
-    return [];
-  }
-};
+export const getClients = () => cache.clients;
+
+export const getCatalog = () => cache.catalog;
 
 export const getSettings = () => {
-  initDataStore();
   try {
     const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY));
     return {
@@ -252,17 +157,10 @@ export const getSettings = () => {
   }
 };
 
-export const getCatalog = () => {
-  initDataStore();
-  try {
-    return JSON.parse(localStorage.getItem(CATALOG_KEY)) || [];
-  } catch (e) {
-    console.error('Error parsing catalog data', e);
-    return [];
-  }
-};
-
 export const masterResetData = () => {
+  cache.projects = [];
+  cache.clients = [];
+  cache.catalog = [];
   const appKeys = [];
   for (let index = 0; index < localStorage.length; index += 1) {
     const key = localStorage.key(index);
@@ -270,56 +168,55 @@ export const masterResetData = () => {
   }
   appKeys.forEach((key) => localStorage.removeItem(key));
   sessionStorage.clear();
+  // Wipe the shared copy on the host too.
+  fetch('/api/data', { method: 'DELETE' }).catch((e) => console.error('Host reset failed', e));
 };
 
 // SETTERS / WRITERS
-export const saveProjects = (projects) => {
-  localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
-};
+export const saveProjects = (projects) => setCollection('projects', projects);
 
-export const saveClients = (clients) => {
-  localStorage.setItem(CLIENTS_KEY, JSON.stringify(clients));
-};
+export const saveClients = (clients) => setCollection('clients', clients);
+
+export const saveCatalog = (catalog) => setCollection('catalog', catalog);
 
 export const saveSettings = (settings) => {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-};
-
-export const saveCatalog = (catalog) => {
-  localStorage.setItem(CATALOG_KEY, JSON.stringify(catalog));
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  } catch (e) {
+    console.error('Unable to save settings locally', e);
+  }
 };
 
 export const addCatalogItem = (item) => {
-  const catalog = getCatalog();
   const newItem = {
     name: '', category: 'Other', unit: 'each', price: 0, store: '', description: '',
     ...item,
     id: item.id || `cat-${Date.now()}`,
   };
-  catalog.push(newItem);
-  saveCatalog(catalog);
+  cache.catalog = [...cache.catalog, newItem];
+  mirrorLocal('catalog');
+  postRecord('catalog', newItem);
   return newItem;
 };
 
 export const updateCatalogItem = (updatedItem) => {
-  const catalog = getCatalog();
-  const index = catalog.findIndex(i => i.id === updatedItem.id);
-  if (index !== -1) {
-    catalog[index] = { ...catalog[index], ...updatedItem };
-    saveCatalog(catalog);
-    return true;
-  }
-  return false;
+  const index = cache.catalog.findIndex(i => i.id === updatedItem.id);
+  if (index === -1) return false;
+  const merged = { ...cache.catalog[index], ...updatedItem };
+  cache.catalog = cache.catalog.map(i => (i.id === merged.id ? merged : i));
+  mirrorLocal('catalog');
+  putRecord('catalog', merged);
+  return true;
 };
 
 export const deleteCatalogItem = (id) => {
-  const catalog = getCatalog().filter(i => i.id !== id);
-  saveCatalog(catalog);
+  cache.catalog = cache.catalog.filter(i => i.id !== id);
+  mirrorLocal('catalog');
+  removeRecord('catalog', id);
 };
 
 // HELPERS
 export const addProject = (project) => {
-  const projects = getProjects();
   const newProject = {
     ...project,
     id: project.id || `p-${Date.now()}`,
@@ -328,57 +225,55 @@ export const addProject = (project) => {
     checklists: project.checklists || [],
     photos: project.photos || [],
   };
-  projects.push(newProject);
-  saveProjects(projects);
+  cache.projects = [...cache.projects, newProject];
+  mirrorLocal('projects');
+  postRecord('projects', newProject);
   return newProject;
 };
 
 export const updateProject = (updatedProject) => {
-  const projects = getProjects();
-  const index = projects.findIndex(p => p.id === updatedProject.id);
-  if (index !== -1) {
-    projects[index] = updatedProject;
-    saveProjects(projects);
-    return true;
-  }
-  return false;
+  const index = cache.projects.findIndex(p => p.id === updatedProject.id);
+  if (index === -1) return false;
+  cache.projects = cache.projects.map(p => (p.id === updatedProject.id ? updatedProject : p));
+  mirrorLocal('projects');
+  putRecord('projects', updatedProject);
+  return true;
 };
 
 export const deleteProject = (id) => {
-  const projects = getProjects();
-  const filtered = projects.filter(p => p.id !== id);
-  saveProjects(filtered);
+  cache.projects = cache.projects.filter(p => p.id !== id);
+  mirrorLocal('projects');
+  removeRecord('projects', id);
 };
 
 export const addClient = (client) => {
-  const clients = getClients();
   const newClient = {
     // Defaults guarantee every record has the fields the UI reads (e.g. email).
     name: '', company: '', email: '', phone: '', address: '', notes: '',
     ...client,
     id: client.id || `c-${Date.now()}`,
   };
-  clients.push(newClient);
-  saveClients(clients);
+  cache.clients = [...cache.clients, newClient];
+  mirrorLocal('clients');
+  postRecord('clients', newClient);
   return newClient;
 };
 
 export const updateClient = (updatedClient) => {
-  const clients = getClients();
-  const index = clients.findIndex(c => c.id === updatedClient.id);
-  if (index !== -1) {
-    // Merge so a partial update (e.g. address only) never wipes other fields.
-    clients[index] = { ...clients[index], ...updatedClient };
-    saveClients(clients);
-    return true;
-  }
-  return false;
+  const index = cache.clients.findIndex(c => c.id === updatedClient.id);
+  if (index === -1) return false;
+  // Merge so a partial update (e.g. address only) never wipes other fields.
+  const merged = { ...cache.clients[index], ...updatedClient };
+  cache.clients = cache.clients.map(c => (c.id === merged.id ? merged : c));
+  mirrorLocal('clients');
+  putRecord('clients', merged);
+  return true;
 };
 
 export const deleteClient = (id) => {
-  const clients = getClients();
-  const filtered = clients.filter(c => c.id !== id);
-  saveClients(filtered);
+  cache.clients = cache.clients.filter(c => c.id !== id);
+  mirrorLocal('clients');
+  removeRecord('clients', id);
 };
 
 // EXPORT / IMPORT
@@ -386,6 +281,7 @@ export const exportDataBackup = () => {
   const data = {
     projects: getProjects(),
     clients: getClients(),
+    catalog: getCatalog(),
     settings: getSettings(),
     exportedAt: new Date().toISOString(),
   };
@@ -406,6 +302,9 @@ export const importDataBackup = (jsonData) => {
     }
     if (data.clients && Array.isArray(data.clients)) {
       saveClients(data.clients);
+    }
+    if (data.catalog && Array.isArray(data.catalog)) {
+      saveCatalog(data.catalog);
     }
     if (data.settings && typeof data.settings === 'object') {
       saveSettings(data.settings);
@@ -441,10 +340,10 @@ export const calculateQuoteTotals = (project, settings) => {
 
   subtotalLaborCost = subtotalLaborHours * laborRate;
   const directCost = subtotalMaterials + subtotalLaborCost;
-  
+
   const markupAmount = directCost * (markupPercent / 100);
   const grossSubtotal = directCost + markupAmount;
-  
+
   // The legacy `materials` field represents the taxable unit-price subtotal.
   const taxAmount = subtotalMaterials * (taxPercent / 100);
   const grandTotal = grossSubtotal + taxAmount;
@@ -456,7 +355,7 @@ export const calculateQuoteTotals = (project, settings) => {
   project.changeOrders.forEach(co => {
     let coMaterials = 0;
     let coLaborHours = 0;
-    
+
     co.items.forEach(item => {
       const qty = parseFloat(item.quantity) || 0;
       const mat = parseFloat(item.materialCost) || 0;
@@ -502,7 +401,7 @@ export const evaluateExpression = (expr) => {
     // Sanitize to only allow numbers, spaces, dots, and basic operators
     cleaned = cleaned.replace(/[^0-9\s.+\-*/()]/g, '');
     if (!cleaned.trim()) return 0;
-    
+
     const result = new Function(`return ${cleaned}`)();
     return typeof result === 'number' && isFinite(result) ? result : 0;
   } catch (e) {
