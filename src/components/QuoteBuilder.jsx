@@ -9,7 +9,8 @@ import {
   ArrowLeft,
   FileText,
   Copy,
-  Download
+  Download,
+  Mail
 } from 'lucide-react';
 import { ESTIMATOR_TEMPLATES, CATEGORIES } from '../utils/templates';
 import { calculateQuoteTotals } from '../utils/dataStore';
@@ -176,6 +177,62 @@ export default function QuoteBuilder({
     generateProposalPdf(project, client, settings);
   };
 
+  const [isEmailing, setIsEmailing] = useState(false);
+
+  const handleEmailQuote = async () => {
+    if (!client?.email) {
+      alert("This client does not have an email address set. Please update the client record.");
+      return;
+    }
+    const confirm = window.confirm(`Generate Stripe Checkout and email this quote to ${client.email}?`);
+    if (!confirm) return;
+    
+    setIsEmailing(true);
+    try {
+      const checkoutRes = await fetch('/api/stripe/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectName: project.name,
+          total: totals.netTotal,
+          email: client.email
+        })
+      });
+      const checkoutData = await checkoutRes.json();
+      if (!checkoutRes.ok) throw new Error(checkoutData.error || 'Failed to create checkout session');
+      
+      const htmlBody = `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; color: #333;">
+          <h2 style="color: #2b6cb0;">Quote for ${project.name}</h2>
+          <p>Hi ${client.name},</p>
+          <p>Thank you for the opportunity to quote this project. Your grand total for this phase is <strong>${new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(totals.netTotal)}</strong>.</p>
+          <p>When you are ready to proceed, you can securely pay online using the button below:</p>
+          <a href="${checkoutData.url}" style="display: inline-block; padding: 12px 24px; background-color: #6772e5; color: #fff; text-decoration: none; border-radius: 4px; font-weight: bold; margin: 20px 0;">Approve & Pay via Stripe</a>
+          <p>If you have any questions, please let us know.</p>
+          <p>Thank you,<br>${settings.companyName || 'Our Team'}</p>
+        </div>
+      `;
+      
+      const emailRes = await fetch('/api/email/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientEmail: client.email,
+          projectName: project.name,
+          htmlBody: htmlBody
+        })
+      });
+      const emailData = await emailRes.json();
+      if (!emailRes.ok) throw new Error(emailData.error || 'Failed to send email');
+      
+      alert("Quote and checkout link successfully emailed to client!");
+    } catch (e) {
+      alert("Error: " + e.message);
+    } finally {
+      setIsEmailing(false);
+    }
+  };
+
   // --- PRINT / CLIENT VIEW RENDER ---
   if (printPreviewMode) {
     return (
@@ -188,6 +245,9 @@ export default function QuoteBuilder({
             </button>
             <button className="btn btn-primary btn-sm" onClick={handleDownloadPdf}>
               <Download size={12} /> Download PDF
+            </button>
+            <button className="btn btn-primary btn-sm" onClick={handleEmailQuote} disabled={isEmailing} style={{ backgroundColor: '#6772e5', borderColor: '#6772e5' }}>
+              <Mail size={12} /> {isEmailing ? 'Sending...' : 'Email & Checkout'}
             </button>
             <button className="btn btn-secondary btn-sm" onClick={handleTriggerPrint}>
               <Printer size={12} /> Print

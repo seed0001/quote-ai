@@ -51,6 +51,7 @@ export default function AIChat({
   const [loadingPhase, setLoadingPhase] = useState('reasoning'); // 'reasoning' | 'executing'
   const [ttsEnabled, setTtsEnabled] = useState(true);
   const [ttsError, setTtsError] = useState('');
+  const [selectedPersona, setSelectedPersona] = useState('default');
 
   // Speech Synthesis states
   const [voices, setVoices] = useState([]);
@@ -60,6 +61,12 @@ export default function AIChat({
   const recognitionRef = useRef(null);
   const fishAudioRef = useRef(null);
   const fishAudioUrlRef = useRef('');
+  const inputTextRef = useRef('');
+  const textBeforeListeningRef = useRef('');
+
+  useEffect(() => {
+    inputTextRef.current = inputText;
+  }, [inputText]);
 
   const hasApiKey = !!(settings.openRouterConfigured || settings.openRouterKey);
 
@@ -75,14 +82,16 @@ export default function AIChat({
 
       rec.onstart = () => {
         setIsListening(true);
+        textBeforeListeningRef.current = inputTextRef.current;
       };
 
       rec.onresult = (event) => {
-        const transcript = event.results[0][0].transcript;
-        setInputText(prev => {
-          const spacing = prev ? ' ' : '';
-          return prev + spacing + transcript;
-        });
+        let currentTranscript = '';
+        for (let i = 0; i < event.results.length; i++) {
+          currentTranscript += event.results[i][0].transcript;
+        }
+        const base = textBeforeListeningRef.current;
+        setInputText((base ? base + ' ' : '') + currentTranscript);
       };
 
       rec.onerror = (event) => {
@@ -243,13 +252,30 @@ export default function AIChat({
     const history = messages
       .filter(m => !m.error)
       .slice(-20)
-      .map(m => ({ role: m.sender === 'ai' ? 'assistant' : 'user', content: m.text }));
+      .map(m => {
+        let content = m.text;
+        if (m.sender === 'ai' && m.persona) {
+          const personaLabel = m.persona.replace('_', ' ').toUpperCase();
+          content = `[Expert: ${personaLabel}]: ${m.text}`;
+        }
+        return { role: m.sender === 'ai' ? 'assistant' : 'user', content };
+      });
 
     setIsLoading(true);
     setLoadingPhase('reasoning');
 
     try {
-      const context = buildContext({ projects, clients, catalog, tasks, activeProjectId, currentView, settings });
+      let personaInstruction = settings.personaStatement || 'Be clear, practical, professional, and attentive to the user.';
+      if (selectedPersona === 'business_management') {
+        personaInstruction = 'You are a Business Management Consultant. Review the conversation history (including input from other experts). Offer strategic insights on operations, margin management, efficiency, and overall business health. Conclude by asking key driving questions to help the user uncover hidden costs or optimize the quote.';
+      } else if (selectedPersona === 'sales_expert') {
+        personaInstruction = 'You are a Sales and Closing Expert. Review the conversation history (including input from other experts). Focus your response on closing techniques, handling client objections, and increasing conversion rates. Conclude by asking key driving questions to help the user position the quote perfectly for the client.';
+      } else if (selectedPersona === 'custom') {
+        personaInstruction = settings.customPersonaPrompt || '';
+      }
+
+      const effectiveSettings = { ...settings, personaStatement: personaInstruction };
+      const context = buildContext({ projects, clients, catalog, tasks, activeProjectId, currentView, settings: effectiveSettings });
 
       // Dual pass: Pass 1 reasons & decides ACT vs CLARIFY, Pass 2 executes the
       // approved plan, then a deterministic gate validates the actions before dispatch.
@@ -257,29 +283,23 @@ export default function AIChat({
         userMessage: query,
         history,
         context,
-        settings,
+        settings: effectiveSettings,
         onPhase: setLoadingPhase
       });
 
       // Only ACT turns mutate the database; CLARIFY turns just ask a question.
       if (result.decision === 'ACT' && result.actions.length > 0) {
-        dispatchNLPActions(result.actions, {
+        // Prevent the AI from navigating the user away from the chat unexpectedly
+        const safeActions = result.actions.filter(a => a.type !== 'SWITCH_VIEW');
+
+        dispatchNLPActions(safeActions, {
           setProjects: onProjectsChange,
           setClients: onClientsChange,
           setCatalog: onCatalogChange,
           setTasks: onTasksChange,
-          setCurrentView,
+          setCurrentView: () => {}, // Disable view switching in chat
           setActiveProjectId
         });
-
-        // Seamless flow: once the AI has built or changed a quote, jump straight
-        // into the Quote Estimator for that project (dispatch already set the
-        // active project) — unless the AI explicitly navigated somewhere itself.
-        const quoteActions = ['ADD_QUOTE_ITEM', 'UPDATE_QUOTE_ITEM', 'CREATE_PROJECT', 'CREATE_CHANGE_ORDER'];
-        const navigated = result.actions.some(a => a.type === 'SWITCH_VIEW');
-        if (!navigated && result.actions.some(a => quoteActions.includes(a.type))) {
-          setCurrentView('quote-builder');
-        }
       }
 
       setMessages(prev => [...prev, {
@@ -289,7 +309,8 @@ export default function AIChat({
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         actions: result.actions,
         reasoning: result.reasoning,
-        decision: result.decision
+        decision: result.decision,
+        persona: selectedPersona
       }]);
 
       // Vocalize response
@@ -367,6 +388,20 @@ export default function AIChat({
               </>
             )}
           </button>
+
+          {/* Persona Selector */}
+          <select
+            className="input-field"
+            style={{ padding: '4px 8px', fontSize: '12px', width: '160px', backgroundColor: 'var(--bg-primary)' }}
+            value={selectedPersona}
+            onChange={(e) => setSelectedPersona(e.target.value)}
+            title="Select AI Persona"
+          >
+            <option value="default">Default Persona</option>
+            <option value="business_management">Business Manager</option>
+            <option value="sales_expert">Sales Expert</option>
+            <option value="custom">Custom Persona</option>
+          </select>
 
           {/* Voice Selector */}
           {ttsEnabled && (settings.fishAudioConfigured || settings.fishAudioKey) && settings.fishVoiceId && (

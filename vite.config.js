@@ -52,6 +52,9 @@ const publicHostConfig = () => {
     openRouterConfigured: Boolean(config.openRouterKey),
     fishAudioConfigured: Boolean(config.fishAudioKey),
     resendConfigured: Boolean(config.resendKey),
+    tavilyConfigured: Boolean(config.tavilyKey),
+    braveSearchConfigured: Boolean(config.braveSearchKey),
+    stripeConfigured: Boolean(config.stripeKey),
   }
 }
 
@@ -151,6 +154,38 @@ const duckDuckGoSearch = async (query) => {
   return results
 }
 
+const tavilySearch = async (query, apiKey) => {
+  if (!apiKey) return []
+  try {
+    const res = await fetch('https://api.tavily.com/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey, query, max_results: 5, include_answer: false })
+    })
+    if (!res.ok) throw new Error(`Tavily error ${res.status}`)
+    const data = await res.json()
+    return (data.results || []).map(r => ({ title: r.title, url: r.url, snippet: r.content }))
+  } catch (e) {
+    console.error('Tavily search error', e)
+    return []
+  }
+}
+
+const braveSearch = async (query, apiKey) => {
+  if (!apiKey) return []
+  try {
+    const res = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=5`, {
+      headers: { 'Accept': 'application/json', 'X-Subscription-Token': apiKey }
+    })
+    if (!res.ok) throw new Error(`Brave error ${res.status}`)
+    const data = await res.json()
+    return (data.web?.results || []).map(r => ({ title: r.title, url: r.url, snippet: r.description }))
+  } catch (e) {
+    console.error('Brave search error', e)
+    return []
+  }
+}
+
 // ---- Email delivery (Resend) + autonomous reminder scheduler ------------
 const escapeHtml = (s) =>
   String(s ?? '')
@@ -210,7 +245,7 @@ const runReminderScheduler = async () => {
     if (!task || typeof task !== 'object') continue
     task.notify = task.notify || {}
 
-    const assignee = task.assigneeEmail || ''
+    const assignee = task.assigneeEmail || config.email || config.notificationFromEmail || ''
     const customer = task.customerOptIn ? clientEmail(task.clientId) : ''
     const when = task.date ? `${task.date}${task.time ? ' ' + task.time : ''}` : 'unscheduled'
 
@@ -330,6 +365,9 @@ const hostConfigPlugin = {
           if (incoming.openRouterKey) next.openRouterKey = incoming.openRouterKey
           if (incoming.fishAudioKey) next.fishAudioKey = incoming.fishAudioKey
           if (incoming.resendKey) next.resendKey = incoming.resendKey
+          if (incoming.tavilyKey) next.tavilyKey = incoming.tavilyKey
+          if (incoming.braveSearchKey) next.braveSearchKey = incoming.braveSearchKey
+          if (incoming.stripeKey) next.stripeKey = incoming.stripeKey
           fs.writeFileSync(HOST_CONFIG_FILE, JSON.stringify(next, null, 2), 'utf8')
           sendJson(res, 200, publicHostConfig())
         } catch (error) {
@@ -420,7 +458,7 @@ const hostConfigPlugin = {
     })
 
     // Internet search for the assistant — proxied so the browser never hits a
-    // cross-origin wall and no API key is needed (DuckDuckGo).
+    // cross-origin wall and aggregates multiple search providers.
     server.middlewares.use('/api/search', async (req, res) => {
       if (req.method !== 'GET') {
         sendJson(res, 405, { error: 'Method not allowed' })
@@ -432,8 +470,33 @@ const hostConfigPlugin = {
         return
       }
       try {
-        const results = await duckDuckGoSearch(query.trim())
-        sendJson(res, 200, { query: query.trim(), results })
+        const config = readHostConfig()
+        const q = query.trim()
+        
+        // Execute all searches concurrently
+        const [ddg, tavily, brave] = await Promise.allSettled([
+          duckDuckGoSearch(q),
+          tavilySearch(q, config.tavilyKey),
+          braveSearch(q, config.braveSearchKey)
+        ])
+        
+        // Aggregate and deduplicate by URL
+        const allResults = [
+          ...(ddg.status === 'fulfilled' ? ddg.value : []),
+          ...(tavily.status === 'fulfilled' ? tavily.value : []),
+          ...(brave.status === 'fulfilled' ? brave.value : [])
+        ]
+        
+        const uniqueUrls = new Set()
+        const deduplicated = []
+        for (const r of allResults) {
+          if (!uniqueUrls.has(r.url)) {
+            uniqueUrls.add(r.url)
+            deduplicated.push(r)
+          }
+        }
+        
+        sendJson(res, 200, { query: q, results: deduplicated.slice(0, 10) })
       } catch (error) {
         sendJson(res, 502, { error: `Search failed: ${error.message}` })
       }
@@ -475,6 +538,95 @@ const hostConfigPlugin = {
         sendJson(res, 200, { sent: true, id: result.id })
       } catch (error) {
         sendJson(res, 400, { error: error.message })
+      }
+    })
+
+    // Create a secure Stripe Checkout Session URL on the fly.
+    // Authorized for any local tunnel user so they can bill clients.
+    server.middlewares.use('/api/stripe/checkout', async (req, res) => {
+      if (req.method !== 'POST') {
+        sendJson(res, 405, { error: 'Method not allowed' })
+        return
+      }
+      try {
+        const config = readHostConfig()
+        if (!config.stripeKey) {
+          sendJson(res, 400, { error: 'Stripe API key is not configured.' })
+          return
+        }
+        const body = JSON.parse((await readBody(req)) || '{}')
+        if (!body.total || !body.projectName) {
+          sendJson(res, 400, { error: 'Missing total or projectName.' })
+          return
+        }
+
+        const form = new URLSearchParams()
+        form.append('payment_method_types[0]', 'card')
+        form.append('line_items[0][price_data][currency]', 'usd')
+        form.append('line_items[0][price_data][product_data][name]', `Quote: ${body.projectName}`)
+        form.append('line_items[0][price_data][unit_amount]', Math.round(body.total * 100).toString()) // Cents
+        form.append('line_items[0][quantity]', '1')
+        form.append('mode', 'payment')
+        form.append('success_url', 'http://localhost:5173/?payment=success') // You can update this to the real prod domain later
+        if (body.email) form.append('customer_email', body.email)
+
+        const stripeRes = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${config.stripeKey}`,
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          body: form.toString()
+        })
+        
+        const data = await stripeRes.json()
+        if (!stripeRes.ok) {
+          sendJson(res, 502, { error: data.error?.message || 'Stripe error' })
+          return
+        }
+        sendJson(res, 200, { url: data.url })
+      } catch (error) {
+        sendJson(res, 500, { error: error.message })
+      }
+    })
+
+    // Dispatch a generic email (used for Quotes and AI ad-hoc emails)
+    server.middlewares.use('/api/email/send', async (req, res) => {
+      if (req.method !== 'POST') {
+        sendJson(res, 405, { error: 'Method not allowed' })
+        return
+      }
+      try {
+        const config = readHostConfig()
+        if (!config.resendKey) {
+          sendJson(res, 400, { error: 'Resend API key is not configured.' })
+          return
+        }
+        
+        const body = JSON.parse((await readBody(req)) || '{}')
+        if (!body.clientEmail || !body.htmlBody) {
+          sendJson(res, 400, { error: 'Missing clientEmail or htmlBody.' })
+          return
+        }
+
+        const from = config.notificationFromEmail || 'QuoteFlow <onboarding@resend.dev>'
+        const company = config.companyName || 'QuoteFlow'
+        
+        const result = await sendEmail({
+          apiKey: config.resendKey,
+          from,
+          to: body.clientEmail,
+          subject: body.subject || `Your Quote from ${company}`,
+          html: body.htmlBody,
+        })
+        
+        if (!result.ok) {
+          sendJson(res, 502, { error: result.error })
+          return
+        }
+        sendJson(res, 200, { sent: true, id: result.id })
+      } catch (error) {
+        sendJson(res, 500, { error: error.message })
       }
     })
   },

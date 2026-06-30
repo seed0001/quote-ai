@@ -38,11 +38,15 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
   
   const [resendKey, setResendKey] = useState(settings.resendKey || '');
   const [notificationFromEmail, setNotificationFromEmail] = useState(settings.notificationFromEmail || '');
+  const [tavilyKey, setTavilyKey] = useState(settings.tavilyKey || '');
+  const [braveSearchKey, setBraveSearchKey] = useState(settings.braveSearchKey || '');
+  const [stripeKey, setStripeKey] = useState(settings.stripeKey || '');
   const [team, setTeam] = useState(Array.isArray(settings.team) ? settings.team : []);
   const [newMemberName, setNewMemberName] = useState('');
   const [newMemberEmail, setNewMemberEmail] = useState('');
   const [testEmail, setTestEmail] = useState('');
   const [testStatus, setTestStatus] = useState('');
+  const [customPersonaPrompt, setCustomPersonaPrompt] = useState(settings.customPersonaPrompt || '');
 
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [importStatus, setImportStatus] = useState({ type: '', message: '' });
@@ -168,6 +172,10 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
       resendKey,
       notificationFromEmail,
       team,
+      customPersonaPrompt,
+      tavilyKey,
+      braveSearchKey,
+      stripeKey,
     };
 
     try {
@@ -184,6 +192,9 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
         openRouterKey: '',
         fishAudioKey: '',
         resendKey: '',
+        tavilyKey: '',
+        braveSearchKey: '',
+        stripeKey: '',
       });
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
@@ -613,6 +624,20 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
               </div>
             )}
 
+            <div className="form-group" style={{ marginTop: '16px' }}>
+              <label className="form-label">Custom AI Persona Prompt</label>
+              <textarea 
+                className="input-field" 
+                placeholder="E.g., You are a strict business management consultant..."
+                value={customPersonaPrompt}
+                onChange={(e) => setCustomPersonaPrompt(e.target.value)}
+                style={{ height: '80px' }}
+              />
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Define custom instructions here. You can select "Custom Persona" in the AI Chat window to use this.
+              </div>
+            </div>
+
             <div style={{ borderTop: '1px dashed var(--border-color)', margin: '24px 0' }}></div>
 
             <h3 style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '14px', letterSpacing: '0.5px' }}>
@@ -725,6 +750,56 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
               />
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
                 Must be a verified Resend sender. Leave blank to use Resend's test address.
+              </div>
+            </div>
+
+            <h3 style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)', margin: '28px 0 14px', letterSpacing: '0.5px' }}>
+              Payment Integration
+            </h3>
+
+            <div className="form-group">
+              <label className="form-label">Stripe API Key</label>
+              <input
+                type="password"
+                className="input-field"
+                placeholder={settings.stripeConfigured ? 'Configured on hosting computer' : 'Paste your Stripe Secret API key (sk_...)'}
+                value={stripeKey}
+                onChange={(e) => setStripeKey(e.target.value)}
+              />
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Powers secure email checkout links.
+              </div>
+            </div>
+
+            <h3 style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)', margin: '28px 0 14px', letterSpacing: '0.5px' }}>
+              Search Providers Configuration
+            </h3>
+
+            <div className="form-group">
+              <label className="form-label">Tavily API Key (AI Search)</label>
+              <input
+                type="password"
+                className="input-field"
+                placeholder={settings.tavilyConfigured ? 'Configured on hosting computer' : 'Paste your Tavily API key (tvly-...)'}
+                value={tavilyKey}
+                onChange={(e) => setTavilyKey(e.target.value)}
+              />
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Powers deep AI-first research summaries.
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Brave Search API Key</label>
+              <input
+                type="password"
+                className="input-field"
+                placeholder={settings.braveSearchConfigured ? 'Configured on hosting computer' : 'Paste your Brave Search API key'}
+                value={braveSearchKey}
+                onChange={(e) => setBraveSearchKey(e.target.value)}
+              />
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Independent index alternative to Google/Bing.
               </div>
             </div>
 

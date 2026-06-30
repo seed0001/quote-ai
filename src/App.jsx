@@ -34,7 +34,7 @@ import ClientDirectory from './components/ClientDirectory';
 import QuoteBuilder from './components/QuoteBuilder';
 import ProjectDetail from './components/ProjectDetail';
 import SettingsView from './components/SettingsView';
-import AICommandLine from './components/AICommandLine';
+
 import AIChat from './components/AIChat';
 import PriceCatalog from './components/PriceCatalog';
 import Calculator from './components/Calculator';
@@ -403,19 +403,7 @@ export default function App() {
             {currentView === 'catalog' && 'Price Catalog'}
           </h1>
 
-          <AICommandLine 
-            projects={projects}
-            clients={clients}
-            settings={settings}
-            activeProjectId={activeProjectId}
-            currentView={currentView}
-            onProjectsChange={handleUpdateProjects}
-            onClientsChange={handleUpdateClients}
-            onCatalogChange={handleUpdateCatalog}
-            onTasksChange={handleUpdateTasks}
-            setCurrentView={setCurrentView}
-            setActiveProjectId={setActiveProjectId}
-          />
+
 
           <div className="topbar-actions">
             {activeProject && currentView !== 'dashboard' && currentView !== 'clients' && currentView !== 'settings' && (

@@ -766,6 +766,21 @@ export const dispatchNLPActions = (actions, callbacks) => {
         };
         break;
       }
+      case 'SEND_EMAIL_TO_CLIENT': {
+        const client = clients.find(c => c.id === payload.clientId);
+        if (client && client.email) {
+          fetch('/api/email/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              clientEmail: client.email,
+              subject: payload.subject,
+              htmlBody: payload.htmlBody
+            })
+          }).catch(err => console.error("Failed to send AI email", err));
+        }
+        break;
+      }
       default:
         break;
     }
