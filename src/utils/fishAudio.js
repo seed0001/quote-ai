@@ -14,7 +14,8 @@ export async function fetchAllFishVoices(apiKey, onProgress) {
   let hasMore = true;
 
   while (hasMore) {
-    const url = new URL(`${FISH_API_BASE}/model`);
+    // A relative path needs a base, or `new URL` throws "Invalid URL".
+    const url = new URL(`${FISH_API_BASE}/model`, window.location.origin);
     url.searchParams.set('page_size', String(pageSize));
     url.searchParams.set('page_number', String(pageNumber));
     url.searchParams.set('sort_by', 'task_count');
