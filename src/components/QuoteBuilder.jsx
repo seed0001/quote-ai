@@ -1,14 +1,15 @@
 import React, { useState, useMemo } from 'react';
-import { 
-  Plus, 
-  Trash2, 
-  ChevronRight, 
-  Settings as SettingsIcon, 
-  Calculator, 
-  Printer, 
-  ArrowLeft, 
+import {
+  Plus,
+  Trash2,
+  ChevronRight,
+  Settings as SettingsIcon,
+  Calculator,
+  Printer,
+  ArrowLeft,
   FileText,
-  Copy
+  Copy,
+  Download
 } from 'lucide-react';
 import { ESTIMATOR_TEMPLATES, CATEGORIES } from '../utils/templates';
 import { calculateQuoteTotals } from '../utils/dataStore';
@@ -168,6 +169,13 @@ export default function QuoteBuilder({
     window.print();
   };
 
+  // One-click branded PDF download (no browser print dialog). jsPDF is loaded
+  // lazily so it never weighs down the initial app load.
+  const handleDownloadPdf = async () => {
+    const { generateProposalPdf } = await import('../utils/generateProposalPdf');
+    generateProposalPdf(project, client, settings);
+  };
+
   // --- PRINT / CLIENT VIEW RENDER ---
   if (printPreviewMode) {
     return (
@@ -178,8 +186,11 @@ export default function QuoteBuilder({
             <button className="btn btn-secondary btn-sm" onClick={() => setPrintPreviewMode(false)}>
               <ArrowLeft size={12} /> Back to Editor
             </button>
-            <button className="btn btn-primary btn-sm" onClick={handleTriggerPrint}>
-              <Printer size={12} /> Print Proposal
+            <button className="btn btn-primary btn-sm" onClick={handleDownloadPdf}>
+              <Download size={12} /> Download PDF
+            </button>
+            <button className="btn btn-secondary btn-sm" onClick={handleTriggerPrint}>
+              <Printer size={12} /> Print
             </button>
           </div>
           <span style={{ fontSize: '12px', color: '#666', fontWeight: 'bold' }}>CLIENT PROPOSAL PREVIEW</span>
@@ -187,14 +198,19 @@ export default function QuoteBuilder({
 
         {/* Company and Client info block */}
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '40px', fontSize: '13px' }}>
-          <div>
-            <h1 style={{ fontSize: '24px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '8px' }}>
-              {settings.companyName || 'Apex Remodeling'}
-            </h1>
-            <div style={{ whiteSpace: 'pre-line', color: '#444' }}>
-              {settings.address}
-              {`\nPhone: ${settings.phone}`}
-              {`\nEmail: ${settings.email}`}
+          <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start' }}>
+            {settings.companyLogo && (
+              <img src={settings.companyLogo} alt="Company logo" style={{ width: '64px', height: '64px', objectFit: 'contain' }} />
+            )}
+            <div>
+              <h1 style={{ fontSize: '24px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '8px' }}>
+                {settings.companyName || 'Apex Remodeling'}
+              </h1>
+              <div style={{ whiteSpace: 'pre-line', color: '#444' }}>
+                {settings.address}
+                {`\nPhone: ${settings.phone}`}
+                {`\nEmail: ${settings.email}`}
+              </div>
             </div>
           </div>
           
@@ -343,6 +359,21 @@ export default function QuoteBuilder({
           </div>
         </div>
 
+        {/* Deposit & Terms */}
+        {(parseFloat(settings.depositPercent) > 0 || settings.proposalTerms) && (
+          <div style={{ marginTop: '24px', fontSize: '12px', color: '#444' }}>
+            {parseFloat(settings.depositPercent) > 0 && (
+              <div style={{ fontWeight: '700', color: '#000', marginBottom: '6px' }}>
+                Deposit due on acceptance ({settings.depositPercent}%):{' '}
+                {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(totals.netTotal * parseFloat(settings.depositPercent) / 100)}
+              </div>
+            )}
+            {settings.proposalTerms && (
+              <div style={{ whiteSpace: 'pre-line', fontSize: '11px', color: '#666' }}>{settings.proposalTerms}</div>
+            )}
+          </div>
+        )}
+
         {/* Signatures */}
         <div style={{ marginTop: '100px', display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
           <div style={{ width: '45%', borderTop: '1px solid #000', paddingTop: '10px' }}>
@@ -369,7 +400,10 @@ export default function QuoteBuilder({
             <ArrowLeft size={14} /> Back
           </button>
           <button className="btn btn-secondary btn-sm" onClick={() => setPrintPreviewMode(true)}>
-            <Printer size={14} /> Print Preview
+            <FileText size={14} /> Proposal Preview
+          </button>
+          <button className="btn btn-primary btn-sm" onClick={handleDownloadPdf}>
+            <Download size={14} /> Download PDF
           </button>
         </div>
 

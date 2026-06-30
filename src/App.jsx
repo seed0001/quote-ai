@@ -5,20 +5,23 @@ import {
   FileSpreadsheet, 
   Briefcase, 
   Settings as SettingsIcon, 
-  Sun, 
+  Sun,
   Moon,
   TrendingUp,
   DollarSign,
   BriefcaseBusiness,
-  MessageSquare
+  MessageSquare,
+  Package
 } from 'lucide-react';
-import { 
-  getProjects, 
-  getClients, 
-  getSettings, 
-  saveProjects, 
-  saveClients, 
+import {
+  getProjects,
+  getClients,
+  getSettings,
+  getCatalog,
+  saveProjects,
+  saveClients,
   saveSettings,
+  saveCatalog,
   initDataStore
 } from './utils/dataStore';
 import Dashboard from './components/Dashboard';
@@ -28,6 +31,7 @@ import ProjectDetail from './components/ProjectDetail';
 import SettingsView from './components/SettingsView';
 import AICommandLine from './components/AICommandLine';
 import AIChat from './components/AIChat';
+import PriceCatalog from './components/PriceCatalog';
 import Calculator from './components/Calculator';
 
 export default function App() {
@@ -35,6 +39,7 @@ export default function App() {
   const [projects, setProjects] = useState([]);
   const [clients, setClients] = useState([]);
   const [settings, setSettings] = useState({});
+  const [catalog, setCatalog] = useState([]);
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [theme, setTheme] = useState('dark');
 
@@ -44,6 +49,7 @@ export default function App() {
     setProjects(getProjects());
     setClients(getClients());
     setSettings(getSettings());
+    setCatalog(getCatalog());
     
     // Load theme
     const storedTheme = localStorage.getItem('quote_ai_theme') || 'dark';
@@ -69,6 +75,11 @@ export default function App() {
   const handleUpdateSettings = (newSettings) => {
     setSettings(newSettings);
     saveSettings(newSettings);
+  };
+
+  const handleUpdateCatalog = (newCatalog) => {
+    setCatalog(newCatalog);
+    saveCatalog(newCatalog);
   };
 
   const toggleTheme = () => {
@@ -160,11 +171,19 @@ export default function App() {
             }}
           />
         );
+      case 'catalog':
+        return (
+          <PriceCatalog
+            catalog={catalog}
+            onCatalogChange={handleUpdateCatalog}
+          />
+        );
       case 'ai-chat':
         return (
-          <AIChat 
+          <AIChat
             projects={projects}
             clients={clients}
+            catalog={catalog}
             settings={settings}
             activeProjectId={activeProjectId}
             currentView={currentView}
@@ -211,6 +230,14 @@ export default function App() {
           >
             <MessageSquare size={18} />
             AI Voice Chat
+          </div>
+
+          <div
+            className={`menu-item ${currentView === 'catalog' ? 'active' : ''}`}
+            onClick={() => { setCurrentView('catalog'); setActiveProjectId(null); }}
+          >
+            <Package size={18} />
+            Price Catalog
           </div>
 
           {activeProjectId && (
@@ -273,6 +300,7 @@ export default function App() {
             {currentView === 'project-detail' && `Job Workspace : ${activeProject?.name || 'Project Overview'}`}
             {currentView === 'settings' && 'System Configuration'}
             {currentView === 'ai-chat' && 'AI Voice Assistant'}
+            {currentView === 'catalog' && 'Price Catalog'}
           </h1>
 
           <AICommandLine 

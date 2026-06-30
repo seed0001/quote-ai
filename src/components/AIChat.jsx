@@ -1,36 +1,55 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, Mic, MicOff, Send, Volume2, VolumeX, Loader2, Database, AlertCircle } from 'lucide-react';
+import { Sparkles, Mic, MicOff, Send, Volume2, VolumeX, Database, Trash2, BrainCircuit, ChevronDown } from 'lucide-react';
 import { dispatchNLPActions } from '../utils/dataStore';
+import { runAgent, buildContext } from '../utils/aiEngine';
 
-export default function AIChat({ 
-  projects, 
-  clients, 
-  settings, 
-  activeProjectId, 
+// Persist conversation across view changes & reloads (local-first, matches dataStore pattern)
+const CHAT_STORAGE_KEY = 'quote_ai_chat_history';
+
+const INITIAL_MESSAGES = [
+  {
+    id: 'm-init',
+    sender: 'ai',
+    text: 'Hello! I am your Apex Remodeling Voice Assistant. Speak or type instructions (e.g. "Add client Clark Kent", "Open kitchen project quote", "Add drywall demolition to Kitchen room"), and I will execute the actions on your database instantly. For a new quote, tell me about the job and I\'ll walk through the details with you.',
+    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    actions: []
+  }
+];
+
+export default function AIChat({
+  projects,
+  clients,
+  catalog,
+  settings,
+  activeProjectId,
   currentView,
   onProjectsChange,
   onClientsChange,
   setCurrentView,
   setActiveProjectId
 }) {
-  const [messages, setMessages] = useState([
-    {
-      id: 'm-init',
-      sender: 'ai',
-      text: 'Hello! I am your Apex Remodeling Voice Assistant. Speak or type instructions (e.g. "Add client Clark Kent", "Open kitchen project quote", "Add drywall demolition to Kitchen room"), and I will execute the actions on your database instantly.',
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      actions: []
+  const [messages, setMessages] = useState(() => {
+    try {
+      const stored = localStorage.getItem(CHAT_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {
+      console.error('Error parsing stored chat history', e);
     }
-  ]);
+    return INITIAL_MESSAGES;
+  });
   const [inputText, setInputText] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingPhase, setLoadingPhase] = useState('reasoning'); // 'reasoning' | 'executing'
   const [ttsEnabled, setTtsEnabled] = useState(true);
-  
+
   // Speech Synthesis states
   const [voices, setVoices] = useState([]);
   const [selectedVoiceName, setSelectedVoiceName] = useState('');
-  
+
   const chatEndRef = useRef(null);
   const recognitionRef = useRef(null);
 
@@ -76,12 +95,12 @@ export default function AIChat({
         const availableVoices = window.speechSynthesis.getVoices();
         setVoices(availableVoices);
         // Default to a natural Google or Microsoft Edge voice if present, else first
-        const defaultVoice = availableVoices.find(v => 
-          v.name.includes('Natural') || 
-          v.name.includes('Google') || 
+        const defaultVoice = availableVoices.find(v =>
+          v.name.includes('Natural') ||
+          v.name.includes('Google') ||
           v.name.includes('Microsoft')
         ) || availableVoices[0];
-        
+
         if (defaultVoice) {
           setSelectedVoiceName(defaultVoice.name);
         }
@@ -99,19 +118,34 @@ export default function AIChat({
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, isLoading]);
 
+  // Persist chat history so it survives navigating between views and reloads
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages));
+    } catch (e) {
+      console.error('Error saving chat history', e);
+    }
+  }, [messages]);
+
+  // Reset conversation to a fresh start
+  const handleClearChat = () => {
+    window.speechSynthesis?.cancel();
+    setMessages([{ ...INITIAL_MESSAGES[0], timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]);
+  };
+
   // Voice output / Text-to-Speech function
   const speakText = (text) => {
     if (!ttsEnabled || !window.speechSynthesis) return;
-    
+
     // Cancel any active speech first
     window.speechSynthesis.cancel();
-    
+
     const utterance = new SpeechSynthesisUtterance(text);
     if (selectedVoiceName) {
       const voiceObj = voices.find(v => v.name === selectedVoiceName);
       if (voiceObj) utterance.voice = voiceObj;
     }
-    
+
     window.speechSynthesis.speak(utterance);
   };
 
@@ -145,7 +179,7 @@ export default function AIChat({
 
     setMessages(prev => [...prev, userMsg]);
     setInputText('');
-    
+
     if (!hasApiKey) {
       setMessages(prev => [...prev, {
         id: `msg-err-${Date.now()}`,
@@ -158,135 +192,60 @@ export default function AIChat({
       return;
     }
 
+    // Conversation memory: prior turns (errors excluded), capped to keep requests light.
+    // `messages` here is the state before this turn's user message was appended.
+    const history = messages
+      .filter(m => !m.error)
+      .slice(-20)
+      .map(m => ({ role: m.sender === 'ai' ? 'assistant' : 'user', content: m.text }));
+
     setIsLoading(true);
+    setLoadingPhase('reasoning');
 
     try {
-      // 1. Prepare minimal DB context
-      const clientsCtx = clients.map(c => ({
-        id: c.id,
-        name: c.name,
-        company: c.company || '',
-        email: c.email || '',
-        phone: c.phone || '',
-        address: c.address || ''
-      }));
+      const context = buildContext({ projects, clients, catalog, activeProjectId, currentView });
 
-      const projectsCtx = projects.map(p => {
-        const summary = {
-          id: p.id,
-          name: p.name,
-          clientId: p.clientId,
-          status: p.status
-        };
-        
-        if (p.id === activeProjectId) {
-          summary.checklists = p.checklists.map(c => ({ id: c.id, text: c.text, completed: c.completed }));
-          summary.changeOrders = p.changeOrders.map(co => ({ id: co.id, title: co.title, status: co.status }));
-          summary.rooms = p.rooms.map(r => ({
-            name: r.name,
-            items: r.items.map(item => ({ id: item.id, name: item.name, category: item.category, unit: item.unit, quantity: item.quantity, materialCost: item.materialCost, laborHours: item.laborHours }))
-          }));
+      // Dual pass: Pass 1 reasons & decides ACT vs CLARIFY, Pass 2 executes the
+      // approved plan, then a deterministic gate validates the actions before dispatch.
+      const result = await runAgent({
+        userMessage: query,
+        history,
+        context,
+        settings,
+        onPhase: setLoadingPhase
+      });
+
+      // Only ACT turns mutate the database; CLARIFY turns just ask a question.
+      if (result.decision === 'ACT' && result.actions.length > 0) {
+        dispatchNLPActions(result.actions, {
+          setProjects: onProjectsChange,
+          setClients: onClientsChange,
+          setCurrentView,
+          setActiveProjectId
+        });
+
+        // Seamless flow: once the AI has built or changed a quote, jump straight
+        // into the Quote Estimator for that project (dispatch already set the
+        // active project) — unless the AI explicitly navigated somewhere itself.
+        const quoteActions = ['ADD_QUOTE_ITEM', 'UPDATE_QUOTE_ITEM', 'CREATE_PROJECT', 'CREATE_CHANGE_ORDER'];
+        const navigated = result.actions.some(a => a.type === 'SWITCH_VIEW');
+        if (!navigated && result.actions.some(a => quoteActions.includes(a.type))) {
+          setCurrentView('quote-builder');
         }
-        return summary;
-      });
-
-      const activeProjectName = projects.find(p => p.id === activeProjectId)?.name || 'None';
-
-      const promptContext = {
-        currentDate: new Date().toISOString().slice(0, 10),
-        currentTime: new Date().toLocaleTimeString(),
-        currentView,
-        activeProjectId: activeProjectId || 'None',
-        activeProjectName,
-        clients: clientsCtx,
-        projects: projectsCtx
-      };
-
-      // 2. System instructions for conversational JSON actions
-      const systemPrompt = `You are the conversational NLP interface for Apex Estimate.
-You translate the user's natural language spoken chat instruction into database actions AND formulate a highly helpful vocalized confirmation response.
-
-Context:
-${JSON.stringify(promptContext, null, 2)}
-
-Return a strict JSON object with:
-1. "actions": Array of command actions to execute.
-2. "response": Natural language confirmation text to display and speak to the contractor. Keep it concise, friendly, and professional (e.g. "I've added the kitchen tile drywall item and updated your estimate summary.").
-
-Available Actions Schema:
-- { "type": "CREATE_CLIENT", "payload": { "name": string, "company": string, "email": string, "phone": string, "address": string, "notes": string } }
-- { "type": "UPDATE_CLIENT", "payload": { "id": string, "name": string, "company": string, "email": string, "phone": string, "address": string, "notes": string } }
-- { "type": "DELETE_CLIENT", "payload": { "id": string } }
-- { "type": "CREATE_PROJECT", "payload": { "name": string, "clientId": string, "status": "lead"|"quoting"|"scheduled"|"progress"|"completed" } }
-- { "type": "UPDATE_PROJECT_STATUS", "payload": { "id": string, "status": "lead"|"quoting"|"scheduled"|"progress"|"completed" } }
-- { "type": "ADD_QUOTE_ITEM", "payload": { "projectId": string, "roomName": string, "name": string, "category": string, "quantity": number|string, "unit": string, "materialCost": number|string, "laborHours": number|string } }
-- { "type": "UPDATE_QUOTE_ITEM", "payload": { "projectId": string, "itemId": string, "name": string, "category": string, "quantity": number|string, "unit": string, "materialCost": number|string, "laborHours": number|string } }
-- { "type": "DELETE_QUOTE_ITEM", "payload": { "projectId": string, "itemId": string } }
-- { "type": "ADD_CHECKLIST_ITEM", "payload": { "projectId": string, "text": string } }
-- { "type": "TOGGLE_CHECKLIST_ITEM", "payload": { "projectId": string, "checklistItemId": string } }
-- { "type": "CREATE_CHANGE_ORDER", "payload": { "projectId": string, "title": string, "description": string, "items": [ { "name": string, "category": string, "quantity": number|string, "unit": string, "materialCost": number|string, "laborHours": number|string } ] } }
-- { "type": "APPROVE_CHANGE_ORDER", "payload": { "projectId": string, "changeOrderId": string } }
-- { "type": "REJECT_CHANGE_ORDER", "payload": { "projectId": string, "changeOrderId": string } }
-- { "type": "SWITCH_VIEW", "payload": { "view": "dashboard"|"clients"|"quote-builder"|"project-detail"|"settings", "projectId": string (optional) } }
-
-Rules:
-- CRITICAL: You have access to a calculation engine. Instead of calculating dimensions, waste factors, or totals in your head (which leads to errors), you MUST write the raw mathematical formula as a string in the payload fields (quantity, materialCost, laborHours, laborRate, markupPercent, taxPercent). For example: "quantity": "12 * 15 * 1.10" or "laborHours": "(180 / 50) * 1.5". The system will solve them. Never try to calculate math in your head.
-- Resolve "this project" or "active project" to activeProjectId (${activeProjectId || 'None'}).
-- Resolve named entities (clients, projects) to their database IDs.
-- Format response for easy reading and speaking. Do not use Markdown codeblocks.`;
-
-      const requestBody = {
-        model: settings.openRouterModel || 'google/gemini-2.5-flash',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: query }
-        ],
-        response_format: { type: 'json_object' }
-      };
-
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${settings.openRouterKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': 'http://localhost:5173/',
-          'X-Title': 'Apex Remodel Estimate Chat'
-        },
-        body: JSON.stringify(requestBody)
-      });
-
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error?.message || `API Error: ${response.status}`);
       }
 
-      const resData = await response.json();
-      const contentText = resData.choices[0]?.message?.content;
-      if (!contentText) throw new Error('Empty response from OpenRouter.');
-
-      const resultObj = JSON.parse(contentText);
-      const parsedActions = resultObj.actions || [];
-      const parsedResponse = resultObj.response || 'Executed successfully.';
-
-      // 3. Dispatch mutations to the local database
-      dispatchNLPActions(parsedActions, {
-        setProjects: onProjectsChange,
-        setClients: onClientsChange,
-        setCurrentView,
-        setActiveProjectId
-      });
-
-      // 4. Update Chat Log
       setMessages(prev => [...prev, {
         id: `msg-ai-${Date.now()}`,
         sender: 'ai',
-        text: parsedResponse,
+        text: result.response,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        actions: parsedActions
+        actions: result.actions,
+        reasoning: result.reasoning,
+        decision: result.decision
       }]);
 
-      // 5. Vocalize response
-      speakText(parsedResponse);
+      // Vocalize response
+      speakText(result.response);
 
     } catch (err) {
       console.error(err);
@@ -305,14 +264,14 @@ Rules:
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 130px)', border: '1px solid var(--border-color)', backgroundColor: 'var(--bg-secondary)' }}>
-      
+
       {/* Voice Controls Bar */}
-      <div 
-        style={{ 
-          padding: '12px 24px', 
-          borderBottom: '1px solid var(--border-color)', 
+      <div
+        style={{
+          padding: '12px 24px',
+          borderBottom: '1px solid var(--border-color)',
           backgroundColor: 'var(--bg-tertiary)',
-          display: 'flex', 
+          display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
           flexWrap: 'wrap',
@@ -325,8 +284,17 @@ Rules:
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+          {/* Clear Chat Button */}
+          <button
+            className="btn btn-sm btn-secondary"
+            onClick={handleClearChat}
+            title="Clear conversation and start fresh"
+          >
+            <Trash2 size={12} /> New Chat
+          </button>
+
           {/* Mute Button */}
-          <button 
+          <button
             className={`btn btn-sm ${ttsEnabled ? 'btn-primary' : 'btn-secondary'}`}
             onClick={() => {
               setTtsEnabled(!ttsEnabled);
@@ -376,7 +344,7 @@ Rules:
         {messages.map(msg => {
           const isAi = msg.sender === 'ai';
           return (
-            <div 
+            <div
               key={msg.id}
               style={{
                 display: 'flex',
@@ -384,12 +352,12 @@ Rules:
                 width: '100%'
               }}
             >
-              <div 
+              <div
                 style={{
                   maxWidth: '75%',
                   border: '1px solid',
-                  borderColor: msg.error 
-                    ? 'var(--danger)' 
+                  borderColor: msg.error
+                    ? 'var(--danger)'
                     : isAi ? 'var(--border-color-active)' : 'var(--border-color)',
                   backgroundColor: isAi ? 'var(--bg-primary)' : 'var(--bg-tertiary)',
                   padding: '16px',
@@ -419,6 +387,21 @@ Rules:
                   {msg.text}
                 </div>
 
+                {/* Reasoning trace (Pass 1) — collapsed by default */}
+                {isAi && msg.reasoning && (
+                  <details style={{ marginTop: '2px' }}>
+                    <summary style={{ cursor: 'pointer', fontSize: '9px', fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <BrainCircuit size={10} style={{ color: 'var(--accent)' }} />
+                      Reasoning
+                      {msg.decision === 'CLARIFY' && <span style={{ color: 'var(--text-muted)', fontWeight: 'normal' }}>· gathering details</span>}
+                      <ChevronDown size={10} />
+                    </summary>
+                    <div style={{ fontSize: '11.5px', lineHeight: '1.5', color: 'var(--text-secondary)', marginTop: '6px', paddingLeft: '8px', borderLeft: '2px solid var(--border-color-active)', fontStyle: 'italic' }}>
+                      {msg.reasoning}
+                    </div>
+                  </details>
+                )}
+
                 {/* Database logs mutator indicator */}
                 {isAi && msg.actions && msg.actions.length > 0 && (
                   <div style={{ borderTop: '1px solid var(--border-color)', marginTop: '8px', paddingTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -440,7 +423,15 @@ Rules:
         {isLoading && (
           <div style={{ display: 'flex', justifyContent: 'flex-start', width: '100%' }}>
             <div style={{ border: '1px dashed var(--border-color)', padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: 'var(--text-secondary)' }}>
-              <Loader2 size={12} className="animate-spin" style={{ color: 'var(--accent)' }} /> Analyzing instruction & synthesizing updates...
+              {loadingPhase === 'executing' ? (
+                <>
+                  <Database size={12} className="animate-spin" style={{ color: 'var(--accent)' }} /> Plan approved — executing actions & updating your database...
+                </>
+              ) : (
+                <>
+                  <BrainCircuit size={12} className="animate-pulse" style={{ color: 'var(--accent)' }} /> Reasoning about your request before taking action...
+                </>
+              )}
             </div>
           </div>
         )}
@@ -450,13 +441,13 @@ Rules:
       {/* Input console */}
       <div style={{ padding: '18px 24px', borderTop: '1px solid var(--border-color)', backgroundColor: 'var(--bg-tertiary)' }}>
         <form onSubmit={handleSendMessage} style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          
+
           {/* Mic Button */}
-          <button 
-            type="button" 
-            className={`btn`} 
-            style={{ 
-              borderRadius: '0px', 
+          <button
+            type="button"
+            className={`btn`}
+            style={{
+              borderRadius: '0px',
               padding: '12px',
               backgroundColor: isListening ? 'var(--danger-muted)' : 'var(--bg-primary)',
               borderColor: isListening ? 'var(--danger)' : 'var(--border-color)',
@@ -475,13 +466,13 @@ Rules:
           </button>
 
           {/* Text Input */}
-          <input 
-            type="text" 
+          <input
+            type="text"
             className="input-field"
             style={{ flex: 1, padding: '12px 16px', backgroundColor: 'var(--bg-primary)' }}
             placeholder={
-              isListening 
-                ? "Listening... Speak clearly into your mic." 
+              isListening
+                ? "Listening... Speak clearly into your mic."
                 : "Type remodeling instructions or toggle microphone..."
             }
             value={inputText}
@@ -490,8 +481,8 @@ Rules:
           />
 
           {/* Send Button */}
-          <button 
-            type="submit" 
+          <button
+            type="submit"
             className="btn btn-primary"
             style={{ padding: '12px 20px', height: '100%' }}
             disabled={!inputText.trim() || isLoading || isListening}

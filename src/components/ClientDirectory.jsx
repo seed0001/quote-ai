@@ -22,11 +22,13 @@ export default function ClientDirectory({
   const [address, setAddress] = useState('');
   const [notes, setNotes] = useState('');
 
-  // Filter clients based on search
-  const filteredClients = clients.filter(c => 
-    c.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    (c.company && c.company.toLowerCase().includes(searchTerm.toLowerCase())) ||
-    c.email.toLowerCase().includes(searchTerm.toLowerCase())
+  // Filter clients based on search. Guard every field — a record missing a
+  // field (e.g. an AI-created client without an email) must not crash the view.
+  const term = searchTerm.toLowerCase();
+  const filteredClients = clients.filter(c =>
+    (c.name || '').toLowerCase().includes(term) ||
+    (c.company || '').toLowerCase().includes(term) ||
+    (c.email || '').toLowerCase().includes(term)
   );
 
   const selectedClient = clients.find(c => c.id === selectedClientId) || clients[0];

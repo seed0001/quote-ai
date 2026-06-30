@@ -1,7 +1,10 @@
+import { DEFAULT_CATALOG } from './catalogSeed';
+
 // LocalStorage Keys
 const PROJECTS_KEY = 'quote_ai_projects';
 const CLIENTS_KEY = 'quote_ai_clients';
 const SETTINGS_KEY = 'quote_ai_settings';
+const CATALOG_KEY = 'quote_ai_catalog';
 
 const DEFAULT_SETTINGS = {
   companyName: 'Apex Remodeling & Design',
@@ -12,6 +15,9 @@ const DEFAULT_SETTINGS = {
   defaultLaborRate: 85.00,
   defaultMarkupPercent: 20.0,
   defaultTaxPercent: 8.25,
+  companyLogo: '',
+  depositPercent: 50,
+  proposalTerms: 'A 50% deposit is required to schedule work; the balance is due upon completion. This proposal is valid for 30 days from the date above.',
   openRouterKey: '',
   openRouterModel: 'openrouter/auto',
 };
@@ -195,6 +201,9 @@ export const initDataStore = () => {
   if (!localStorage.getItem(SETTINGS_KEY)) {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(DEFAULT_SETTINGS));
   }
+  if (!localStorage.getItem(CATALOG_KEY)) {
+    localStorage.setItem(CATALOG_KEY, JSON.stringify(DEFAULT_CATALOG));
+  }
 };
 
 // GETTERS
@@ -228,6 +237,16 @@ export const getSettings = () => {
   }
 };
 
+export const getCatalog = () => {
+  initDataStore();
+  try {
+    return JSON.parse(localStorage.getItem(CATALOG_KEY)) || [];
+  } catch (e) {
+    console.error('Error parsing catalog data', e);
+    return DEFAULT_CATALOG;
+  }
+};
+
 // SETTERS / WRITERS
 export const saveProjects = (projects) => {
   localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
@@ -239,6 +258,38 @@ export const saveClients = (clients) => {
 
 export const saveSettings = (settings) => {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+};
+
+export const saveCatalog = (catalog) => {
+  localStorage.setItem(CATALOG_KEY, JSON.stringify(catalog));
+};
+
+export const addCatalogItem = (item) => {
+  const catalog = getCatalog();
+  const newItem = {
+    name: '', category: 'Other', unit: 'each', price: 0, store: '', description: '',
+    ...item,
+    id: item.id || `cat-${Date.now()}`,
+  };
+  catalog.push(newItem);
+  saveCatalog(catalog);
+  return newItem;
+};
+
+export const updateCatalogItem = (updatedItem) => {
+  const catalog = getCatalog();
+  const index = catalog.findIndex(i => i.id === updatedItem.id);
+  if (index !== -1) {
+    catalog[index] = { ...catalog[index], ...updatedItem };
+    saveCatalog(catalog);
+    return true;
+  }
+  return false;
+};
+
+export const deleteCatalogItem = (id) => {
+  const catalog = getCatalog().filter(i => i.id !== id);
+  saveCatalog(catalog);
 };
 
 // HELPERS
@@ -277,6 +328,8 @@ export const deleteProject = (id) => {
 export const addClient = (client) => {
   const clients = getClients();
   const newClient = {
+    // Defaults guarantee every record has the fields the UI reads (e.g. email).
+    name: '', company: '', email: '', phone: '', address: '', notes: '',
     ...client,
     id: client.id || `c-${Date.now()}`,
   };
@@ -289,7 +342,8 @@ export const updateClient = (updatedClient) => {
   const clients = getClients();
   const index = clients.findIndex(c => c.id === updatedClient.id);
   if (index !== -1) {
-    clients[index] = updatedClient;
+    // Merge so a partial update (e.g. address only) never wipes other fields.
+    clients[index] = { ...clients[index], ...updatedClient };
     saveClients(clients);
     return true;
   }
@@ -436,8 +490,20 @@ export const dispatchNLPActions = (actions, callbacks) => {
   let projects = getProjects();
   let clients = getClients();
   let settings = getSettings();
+  const catalog = getCatalog();
   let activeProjectId = null;
   let viewChanged = null;
+
+  // Resolve an item's material unit price. When a catalogId is supplied, the
+  // catalog price is authoritative (the AI cannot override it with a guess).
+  // Otherwise fall back to the explicitly provided materialCost.
+  const resolveMaterialCost = (item) => {
+    if (item.catalogId) {
+      const product = catalog.find(c => c.id === item.catalogId);
+      if (product) return product.price;
+    }
+    return evaluateExpression(item.materialCost) || 0;
+  };
 
   actions.forEach(action => {
     const { type, payload } = action;
@@ -482,6 +548,25 @@ export const dispatchNLPActions = (actions, callbacks) => {
         }
         break;
       }
+      case 'UPDATE_PROJECT': {
+        const project = projects.find(p => p.id === payload.id);
+        if (project) {
+          // Only overwrite fields the caller actually supplied.
+          if (payload.name !== undefined) project.name = payload.name;
+          if (payload.clientId !== undefined) project.clientId = payload.clientId;
+          if (payload.status !== undefined) project.status = payload.status;
+          if (payload.startDate !== undefined) project.startDate = payload.startDate;
+          if (payload.endDate !== undefined) project.endDate = payload.endDate;
+          if (payload.laborRate !== undefined) project.laborRate = evaluateExpression(payload.laborRate);
+          if (payload.markupPercent !== undefined) project.markupPercent = evaluateExpression(payload.markupPercent);
+          if (payload.taxPercent !== undefined) project.taxPercent = evaluateExpression(payload.taxPercent);
+          updateProject(project);
+          projects = getProjects();
+          callbacks.setProjects(projects);
+          activeProjectId = payload.id;
+        }
+        break;
+      }
       case 'ADD_QUOTE_ITEM': {
         const pId = payload.projectId;
         const project = projects.find(p => p.id === pId);
@@ -492,14 +577,16 @@ export const dispatchNLPActions = (actions, callbacks) => {
             room = { name: roomName, items: [] };
             project.rooms.push(room);
           }
+          const product = payload.catalogId ? catalog.find(c => c.id === payload.catalogId) : null;
           const newItem = {
             id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-            category: payload.category || 'Other',
-            name: payload.name || 'Remodel Scope Task',
-            unit: payload.unit || 'each',
+            category: payload.category || product?.category || 'Other',
+            name: payload.name || product?.name || 'Remodel Scope Task',
+            unit: payload.unit || product?.unit || 'each',
             quantity: evaluateExpression(payload.quantity) || 1,
-            materialCost: evaluateExpression(payload.materialCost) || 0,
-            laborHours: evaluateExpression(payload.laborHours) || 0
+            materialCost: resolveMaterialCost(payload),
+            laborHours: evaluateExpression(payload.laborHours) || 0,
+            catalogId: payload.catalogId || null
           };
           room.items.push(newItem);
           updateProject(project);
@@ -520,7 +607,13 @@ export const dispatchNLPActions = (actions, callbacks) => {
               if (payload.category !== undefined) item.category = payload.category;
               if (payload.unit !== undefined) item.unit = payload.unit;
               if (payload.quantity !== undefined) item.quantity = evaluateExpression(payload.quantity);
-              if (payload.materialCost !== undefined) item.materialCost = evaluateExpression(payload.materialCost);
+              if (payload.catalogId !== undefined) {
+                // Re-point to a catalog product: price becomes authoritative.
+                item.catalogId = payload.catalogId;
+                item.materialCost = resolveMaterialCost(payload);
+              } else if (payload.materialCost !== undefined) {
+                item.materialCost = evaluateExpression(payload.materialCost);
+              }
               if (payload.laborHours !== undefined) item.laborHours = evaluateExpression(payload.laborHours);
             }
           });
@@ -581,15 +674,19 @@ export const dispatchNLPActions = (actions, callbacks) => {
         const pId = payload.projectId;
         const project = projects.find(p => p.id === pId);
         if (project) {
-          const items = (payload.items || []).map(item => ({
-            id: `coi-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-            category: item.category || 'Other',
-            name: item.name || 'Change Order Task',
-            unit: item.unit || 'each',
-            quantity: evaluateExpression(item.quantity) || 1,
-            materialCost: evaluateExpression(item.materialCost) || 0,
-            laborHours: evaluateExpression(item.laborHours) || 0
-          }));
+          const items = (payload.items || []).map(item => {
+            const product = item.catalogId ? catalog.find(c => c.id === item.catalogId) : null;
+            return {
+              id: `coi-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+              category: item.category || product?.category || 'Other',
+              name: item.name || product?.name || 'Change Order Task',
+              unit: item.unit || product?.unit || 'each',
+              quantity: evaluateExpression(item.quantity) || 1,
+              materialCost: resolveMaterialCost(item),
+              laborHours: evaluateExpression(item.laborHours) || 0,
+              catalogId: item.catalogId || null
+            };
+          });
           const newCO = {
             id: `co-${Date.now()}`,
             title: payload.title || 'Additional Work Scope',

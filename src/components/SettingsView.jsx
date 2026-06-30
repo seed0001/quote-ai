@@ -11,6 +11,9 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
   const [defaultLaborRate, setDefaultLaborRate] = useState(settings.defaultLaborRate || 85);
   const [defaultMarkupPercent, setDefaultMarkupPercent] = useState(settings.defaultMarkupPercent || 20);
   const [defaultTaxPercent, setDefaultTaxPercent] = useState(settings.defaultTaxPercent || 8.25);
+  const [companyLogo, setCompanyLogo] = useState(settings.companyLogo || '');
+  const [depositPercent, setDepositPercent] = useState(settings.depositPercent !== undefined ? settings.depositPercent : 50);
+  const [proposalTerms, setProposalTerms] = useState(settings.proposalTerms || '');
   const PRESET_MODELS = [
     'openrouter/auto',
     'google/gemini-2.5-flash:free',
@@ -46,9 +49,22 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
     setOpenRouterModel(val);
   };
 
+  const handleLogoUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 1000000) {
+      alert('Logo image is too large (1MB max to keep it in local storage).');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onloadend = () => setCompanyLogo(reader.result);
+    reader.readAsDataURL(file);
+  };
+
   const handleSave = (e) => {
     e.preventDefault();
     onSettingsChange({
+      ...settings,
       companyName,
       contractorName,
       email,
@@ -57,6 +73,9 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
       defaultLaborRate: parseFloat(defaultLaborRate) || 0,
       defaultMarkupPercent: parseFloat(defaultMarkupPercent) || 0,
       defaultTaxPercent: parseFloat(defaultTaxPercent) || 0,
+      companyLogo,
+      depositPercent: parseFloat(depositPercent) || 0,
+      proposalTerms,
       openRouterKey,
       openRouterModel,
     });
@@ -148,12 +167,34 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
 
             <div className="form-group">
               <label className="form-label">Business / Mailing Address</label>
-              <textarea 
-                className="input-field" 
+              <textarea
+                className="input-field"
                 value={address}
                 onChange={(e) => setAddress(e.target.value)}
                 placeholder="Include street, city, state, zip..."
               />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Company Logo (appears on proposals)</label>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                {companyLogo ? (
+                  <img src={companyLogo} alt="Company logo" style={{ width: '56px', height: '56px', objectFit: 'contain', border: '1px solid var(--border-color)', padding: '4px', backgroundColor: 'var(--bg-primary)' }} />
+                ) : (
+                  <div style={{ width: '56px', height: '56px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px dashed var(--border-color)', fontSize: '9px', color: 'var(--text-muted)', textAlign: 'center' }}>
+                    No logo
+                  </div>
+                )}
+                <label className="btn btn-secondary btn-sm" style={{ marginBottom: 0 }}>
+                  <Upload size={12} /> Upload Logo
+                  <input type="file" accept="image/*" onChange={handleLogoUpload} style={{ display: 'none' }} />
+                </label>
+                {companyLogo && (
+                  <button type="button" className="btn btn-secondary btn-sm" style={{ color: 'var(--danger)' }} onClick={() => setCompanyLogo('')}>
+                    <Trash2 size={12} /> Remove
+                  </button>
+                )}
+              </div>
             </div>
 
             <div style={{ borderTop: '1px dashed var(--border-color)', margin: '24px 0' }}></div>
@@ -195,15 +236,49 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
             <div className="form-group">
               <label className="form-label">Standard Sales Tax (%)</label>
               <div className="input-group">
-                <input 
-                  type="number" 
-                  className="input-field" 
+                <input
+                  type="number"
+                  className="input-field"
                   value={defaultTaxPercent}
                   onChange={(e) => setDefaultTaxPercent(e.target.value)}
                   style={{ fontFamily: 'var(--font-mono)' }}
                 />
                 <span className="input-addon">%</span>
               </div>
+            </div>
+
+            <div style={{ borderTop: '1px dashed var(--border-color)', margin: '24px 0' }}></div>
+
+            <h3 style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '14px', letterSpacing: '0.5px' }}>
+              Proposal Document Defaults
+            </h3>
+
+            <div className="form-group">
+              <label className="form-label">Deposit Required (%)</label>
+              <div className="input-group">
+                <input
+                  type="number"
+                  className="input-field"
+                  value={depositPercent}
+                  onChange={(e) => setDepositPercent(e.target.value)}
+                  style={{ fontFamily: 'var(--font-mono)' }}
+                />
+                <span className="input-addon">%</span>
+              </div>
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Shown on the proposal as a deposit due on acceptance. Set to 0 to hide.
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Proposal Terms / Payment Notes</label>
+              <textarea
+                className="input-field"
+                value={proposalTerms}
+                onChange={(e) => setProposalTerms(e.target.value)}
+                placeholder="Payment terms, warranty, validity period..."
+                rows={3}
+              />
             </div>
 
             <div style={{ borderTop: '1px dashed var(--border-color)', margin: '24px 0' }}></div>
