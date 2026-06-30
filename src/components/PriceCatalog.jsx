@@ -3,8 +3,8 @@ import { Search, Plus, Edit2, Trash2, X, Package } from 'lucide-react';
 import { addCatalogItem, updateCatalogItem, deleteCatalogItem, getCatalog } from '../utils/dataStore';
 
 // Suggestions only — the fields accept any custom value the user types.
-const SUGGESTED_CATEGORIES = ['Plumbing', 'Lighting', 'Electrical', 'Tile & Stone', 'Flooring', 'Cabinets & Tops', 'Drywall', 'Framing', 'Insulation', 'Painting', 'Doors & Trim', 'Other'];
-const SUGGESTED_UNITS = ['each', 'sq ft', 'linear ft', 'hour', 'gallon', 'box', 'bag'];
+const SUGGESTED_CATEGORIES = ['Products', 'Services', 'Labor', 'Consulting', 'Design', 'Equipment', 'Rentals', 'Travel', 'Shipping', 'Licenses & Fees', 'Subcontractors', 'Other'];
+const SUGGESTED_UNITS = ['each', 'hour', 'day', 'week', 'month', 'project', 'package', 'session', 'mile', 'sq ft', 'linear ft', 'box'];
 
 const EMPTY_FORM = { name: '', category: '', unit: 'each', price: '', store: '', description: '' };
 
@@ -98,7 +98,7 @@ export default function PriceCatalog({ catalog, onCatalogChange }) {
           </div>
         </div>
         <button className="btn btn-primary btn-sm" onClick={openAdd}>
-          <Plus size={14} /> Add Product
+          <Plus size={14} /> Add Catalog Item
         </button>
       </div>
 
@@ -109,7 +109,7 @@ export default function PriceCatalog({ catalog, onCatalogChange }) {
           <input
             type="text"
             className="input-field"
-            placeholder="Search products, stores, descriptions..."
+            placeholder="Search products, services, vendors, descriptions..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
           />
@@ -132,11 +132,11 @@ export default function PriceCatalog({ catalog, onCatalogChange }) {
         <table className="app-table" style={{ fontSize: '13px' }}>
           <thead>
             <tr>
-              <th>Product</th>
+              <th>Product / Service</th>
               <th style={{ width: '14%' }}>Category</th>
               <th style={{ width: '9%' }}>Unit</th>
               <th style={{ width: '11%', textAlign: 'right' }}>Price</th>
-              <th style={{ width: '18%' }}>Store / Vendor</th>
+              <th style={{ width: '18%' }}>Vendor / Source</th>
               <th style={{ width: '8%' }}></th>
             </tr>
           </thead>
@@ -198,7 +198,7 @@ export default function PriceCatalog({ catalog, onCatalogChange }) {
         <div className="modal-overlay">
           <div className="modal-content">
             <div className="modal-header">
-              <h3 className="panel-title">{editingId ? 'Edit Product' : 'Add Product'}</h3>
+              <h3 className="panel-title">{editingId ? 'Edit Catalog Item' : 'Add Catalog Item'}</h3>
               <button onClick={() => setShowModal(false)} style={{ cursor: 'pointer', color: 'var(--text-secondary)' }}>
                 <X size={18} />
               </button>
@@ -207,11 +207,11 @@ export default function PriceCatalog({ catalog, onCatalogChange }) {
             <form onSubmit={handleSubmit}>
               <div className="modal-body">
                 <div className="form-group">
-                  <label className="form-label">Product Name</label>
+                  <label className="form-label">Product / Service Name</label>
                   <input
                     type="text"
                     className="input-field"
-                    placeholder="e.g. Comfort-Height Toilet"
+                    placeholder="e.g. Strategy Session, Equipment Rental, Premium Package"
                     value={form.name}
                     onChange={(e) => handleField('name', e.target.value)}
                     required
@@ -225,7 +225,7 @@ export default function PriceCatalog({ catalog, onCatalogChange }) {
                       type="text"
                       className="input-field"
                       list="catalog-categories"
-                      placeholder="e.g. Plumbing"
+                      placeholder="e.g. Services"
                       value={form.category}
                       onChange={(e) => handleField('category', e.target.value)}
                     />
@@ -263,11 +263,11 @@ export default function PriceCatalog({ catalog, onCatalogChange }) {
                     />
                   </div>
                   <div className="form-group">
-                    <label className="form-label">Store / Vendor</label>
+                    <label className="form-label">Vendor / Source</label>
                     <input
                       type="text"
                       className="input-field"
-                      placeholder="e.g. Home Depot / Lowe's"
+                      placeholder="Optional supplier, partner, or source"
                       value={form.store}
                       onChange={(e) => handleField('store', e.target.value)}
                     />
@@ -278,7 +278,7 @@ export default function PriceCatalog({ catalog, onCatalogChange }) {
                   <label className="form-label">Description</label>
                   <textarea
                     className="input-field"
-                    placeholder="General product notes, size, grade..."
+                    placeholder="Scope, specifications, tier, or internal pricing notes..."
                     value={form.description}
                     onChange={(e) => handleField('description', e.target.value)}
                   />
@@ -290,7 +290,7 @@ export default function PriceCatalog({ catalog, onCatalogChange }) {
                   Cancel
                 </button>
                 <button type="submit" className="btn btn-primary">
-                  {editingId ? 'Save Changes' : 'Add Product'}
+                  {editingId ? 'Save Changes' : 'Add Catalog Item'}
                 </button>
               </div>
             </form>

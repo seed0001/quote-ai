@@ -9,7 +9,7 @@
 //   validated against the live database context. Invalid actions are dropped so
 //   they can never corrupt the local database.
 
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_URL = '/api/openrouter/api/v1/chat/completions';
 
 const VALID_STATUSES = ['lead', 'quoting', 'scheduled', 'progress', 'completed'];
 const VALID_VIEWS = ['dashboard', 'clients', 'quote-builder', 'project-detail', 'settings'];
@@ -33,7 +33,7 @@ const ACTION_SCHEMA = `Available Actions Schema:
 
 // Build the compact DB snapshot the model reasons over. Mirrors the prior
 // inline context-builder so the model sees the same shape it always has.
-export function buildContext({ projects, clients, catalog, activeProjectId, currentView }) {
+export function buildContext({ projects, clients, catalog, activeProjectId, currentView, settings = {} }) {
   const clientsCtx = clients.map(c => ({
     id: c.id,
     name: c.name,
@@ -74,6 +74,12 @@ export function buildContext({ projects, clients, catalog, activeProjectId, curr
   const activeProjectName = projects.find(p => p.id === activeProjectId)?.name || 'None';
 
   return {
+    businessProfile: {
+      companyName: settings.companyName || 'My Business',
+      businessType: settings.businessType || 'General products and services',
+      businessDescription: settings.businessDescription || 'A flexible business that creates project quotes for clients.',
+      personaStatement: settings.personaStatement || 'Be clear, practical, professional, and attentive to the user.'
+    },
     currentDate: new Date().toISOString().slice(0, 10),
     currentTime: new Date().toLocaleTimeString(),
     currentView,
@@ -87,21 +93,24 @@ export function buildContext({ projects, clients, catalog, activeProjectId, curr
 
 // PASS 1 prompt — reasoning only, no execution.
 function reasoningPrompt(context) {
-  return `You are the reasoning core for Apex Estimate, a remodeling contractor job workspace assistant.
+  return `You are the reasoning core for QuoteFlow, a flexible quoting and project workspace for any line of business.
 In THIS step your only job is to THINK. You do NOT execute anything and you do NOT touch the database.
 
-This is an ongoing conversation. The prior messages are your memory of it — read them for context and never re-ask for something the contractor has already told you.
+Adapt your vocabulary, assumptions, and questions to the configured business profile. A project section may represent a phase, department, deliverable, package, location, room, event, campaign, workstream, or any other useful grouping.
+Follow the personaStatement in the business profile for tone, behavior, and decision-making style, unless it conflicts with accuracy, safety, or these execution rules.
+
+This is an ongoing conversation. The prior messages are your memory of it — read them for context and never re-ask for something the user has already told you.
 
 Current Application Context:
 ${JSON.stringify(context, null, 2)}
 
-Reason carefully about the contractor's latest message:
+Reason carefully about the user's latest message:
 - What are they actually trying to accomplish?
 - What do you already know (from the context and the conversation) versus what is genuinely missing?
-- For QUOTES especially, do NOT guess line items blindly. Decide whether you have enough scope to build a reliable estimate. The details that matter: which client/project it is for, the room/area and its rough dimensions or square footage, the scope of work (demolition, plumbing, electrical, framing, drywall, tile/flooring, cabinets/countertops, fixtures, paint), the materials/finish quality tier (budget, mid-range, high-end), and any specific fixtures the client wants.
-- PRICING IS NOT GUESSWORK. Material/product unit prices MUST come from the priceCatalog in the context, or from a price the contractor explicitly stated. For each material in the scope, find the matching catalog product. If a needed product is NOT in the catalog and the contractor has not given you a price, you must CLARIFY — ask them to either add it to the Price Catalog or tell you the price. Never invent a material price.
-- LABOR is the exception: you MAY estimate labor hours from your trade knowledge (and quantities/areas via the calculator). Only the hard material prices are off-limits to guessing.
-- If important details OR any required material price are missing, you must CLARIFY (ask for them) rather than act.
+- For QUOTES especially, do NOT guess line items blindly. Decide whether you have enough scope to build a reliable estimate. Relevant details depend on the configured business, but commonly include deliverables or products, quantities, project sections or phases, service time, quality tier, deadlines, exclusions, and special requirements.
+- PRICING IS NOT GUESSWORK. Product, service, fee, rental, or other unit prices MUST come from the priceCatalog, or from a price the user explicitly stated. If a needed item is not in the catalog and no price was provided, CLARIFY. Never invent a unit price.
+- TIME is the exception: you MAY estimate labor or service hours from relevant domain knowledge when reasonable. If the business does not bill by time, use zero hours.
+- If important details or any required unit price are missing, CLARIFY rather than act.
 - If you have enough to proceed, outline a concrete, ordered plan describing each database action to take.
 
 Return a STRICT JSON object with exactly these fields:
@@ -109,7 +118,7 @@ Return a STRICT JSON object with exactly these fields:
   "reasoning": "your concise step-by-step analysis (a few sentences)",
   "decision": "ACT" or "CLARIFY",
   "plan": ["ordered, plain-language steps describing each action to take"],
-  "clarifyingQuestion": "one or two focused questions for the contractor"
+  "clarifyingQuestion": "one or two focused questions for the user"
 }
 When decision is "CLARIFY": "plan" must be [] and put your question(s) in "clarifyingQuestion".
 When decision is "ACT": "clarifyingQuestion" must be "" and "plan" must list the steps.
@@ -120,7 +129,7 @@ Do not wrap the JSON in markdown code blocks.`;
 // PASS 2 prompt — execute the approved plan into strict action JSON.
 function executionPrompt(context, plan, reasoning) {
   const planText = (plan || []).map((s, i) => `${i + 1}. ${s}`).join('\n') || '(no explicit steps provided)';
-  return `You are the execution core for Apex Estimate. A planning step has already reasoned about the contractor's request and approved a plan. Your job is to translate that plan into precise, schema-correct database actions plus a short spoken confirmation.
+  return `You are the execution core for QuoteFlow. A planning step has already reasoned about the user's request and approved a plan. Your job is to translate that plan into precise, schema-correct database actions plus a short spoken confirmation.
 
 Current Application Context:
 ${JSON.stringify(context, null, 2)}
@@ -133,14 +142,14 @@ ${planText}
 
 Return a STRICT JSON object with exactly two fields:
 1. "actions": Array of action objects matching the schema below.
-2. "response": Natural language confirmation to display and speak to the contractor. Concise, friendly, professional. Do not use Markdown code blocks.
+2. "response": Natural language confirmation to display and speak to the user. Concise, friendly, professional. Do not use Markdown code blocks.
 
 ${ACTION_SCHEMA}
 
 Rules:
 - CRITICAL: You have access to a calculation engine. Never do math in your head. Instead, write the raw formula as a string in numeric payload fields (quantity, materialCost, laborHours, laborRate, markupPercent, taxPercent). For example: "quantity": "12 * 15 * 1.10" or "laborHours": "(180 / 50) * 1.5". The system solves them exactly.
-- CRITICAL PRICING: Material unit prices are NOT yours to invent. For every material line item, find the matching product in priceCatalog and set its "catalogId" — the system then uses the catalog's authoritative unit price (you may omit materialCost when catalogId is set). If the contractor explicitly gave a price for an item not in the catalog, put that exact number in materialCost (no catalogId). Never write a materialCost you guessed; if you reach this step without a catalog match or a contractor-given price for a material, that item should not have been planned — omit it.
-- LABOR may be estimated: set laborHours from reasonable trade knowledge (use the calculator for formulas). Catalog products do not carry labor, so you always supply laborHours yourself.
+- CRITICAL PRICING: Unit prices are NOT yours to invent. For every cataloged product, service, fee, rental, or other line item, set its "catalogId"; the system then uses the catalog's authoritative unit price. If the user explicitly gave a price for an uncataloged item, put that exact number in materialCost. Otherwise omit it and ask for pricing.
+- TIME may be estimated when appropriate: laborHours represents billable or internal service time per unit. Use zero when time does not apply.
 - Resolve "this project" / "active job" to activeProjectId (${context.activeProjectId}).
 - Resolve named clients/projects to their existing IDs from the context.
 - To create a NEW client and immediately a project (and/or quote items) for them in the SAME turn: assign a unique temporary id to the CREATE_CLIENT payload (e.g. "id": "c-tmp-1") and reuse that exact string as the project's clientId. Likewise assign a temporary id to CREATE_PROJECT (e.g. "id": "p-tmp-1") and reuse it as the projectId for that turn's quote items. Never reference an id that neither exists in the context nor is created earlier in this same actions array.
@@ -164,10 +173,9 @@ async function callOpenRouter({ systemPrompt, history, userMessage, settings }) 
   const response = await fetch(OPENROUTER_URL, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${settings.openRouterKey}`,
       'Content-Type': 'application/json',
       'HTTP-Referer': 'http://localhost:5173/',
-      'X-Title': 'Apex Remodel Estimate Chat'
+      'X-Title': 'QuoteFlow Business Estimate Chat'
     },
     body: JSON.stringify(requestBody)
   });

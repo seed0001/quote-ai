@@ -11,7 +11,8 @@ import {
   DollarSign,
   BriefcaseBusiness,
   MessageSquare,
-  Package
+  Package,
+  Smartphone
 } from 'lucide-react';
 import {
   getProjects,
@@ -33,6 +34,7 @@ import AICommandLine from './components/AICommandLine';
 import AIChat from './components/AIChat';
 import PriceCatalog from './components/PriceCatalog';
 import Calculator from './components/Calculator';
+import Mobile from './components/Mobile';
 
 export default function App() {
   const [currentView, setCurrentView] = useState('dashboard');
@@ -48,8 +50,38 @@ export default function App() {
     initDataStore();
     setProjects(getProjects());
     setClients(getClients());
-    setSettings(getSettings());
+    const localSettings = getSettings();
+    setSettings(localSettings);
     setCatalog(getCatalog());
+
+    const loadHostedConfiguration = async () => {
+      try {
+        const isHostBrowser = ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+        if (isHostBrowser && (localSettings.openRouterKey || localSettings.fishAudioKey)) {
+          const migrationResponse = await fetch('/api/host-config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(localSettings),
+          });
+          if (migrationResponse.ok) {
+            const hosted = await migrationResponse.json();
+            const sanitized = { ...localSettings, ...hosted, openRouterKey: '', fishAudioKey: '' };
+            saveSettings(sanitized);
+            setSettings(sanitized);
+            return;
+          }
+        }
+
+        const response = await fetch('/api/host-config', { cache: 'no-store' });
+        if (response.ok) {
+          const hosted = await response.json();
+          setSettings((current) => ({ ...current, ...hosted, openRouterKey: '', fishAudioKey: '' }));
+        }
+      } catch (error) {
+        console.error('Unable to load hosted QuoteFlow configuration.', error);
+      }
+    };
+    loadHostedConfiguration();
     
     // Load theme
     const storedTheme = localStorage.getItem('quote_ai_theme') || 'dark';
@@ -198,13 +230,29 @@ export default function App() {
     }
   };
 
+  if (currentView === 'mobile') {
+    return (
+      <Mobile
+        projects={projects}
+        clients={clients}
+        catalog={catalog}
+        settings={settings}
+        activeProjectId={activeProjectId}
+        onProjectsChange={handleUpdateProjects}
+        onClientsChange={handleUpdateClients}
+        setActiveProjectId={setActiveProjectId}
+        onExit={() => setCurrentView('dashboard')}
+      />
+    );
+  }
+
   return (
     <div className="app-container">
       {/* Left-hand Navigation Sidebar */}
       <aside className="sidebar no-print">
         <div className="sidebar-header">
           <BriefcaseBusiness size={20} style={{ color: 'var(--accent)', marginRight: '8px' }} />
-          <span>APEX</span> ESTIMATE
+          <span>QUOTE</span> FLOW
         </div>
         
         <nav className="sidebar-menu">
@@ -233,6 +281,14 @@ export default function App() {
           </div>
 
           <div
+            className="menu-item"
+            onClick={() => { setCurrentView('mobile'); setActiveProjectId(null); }}
+          >
+            <Smartphone size={18} />
+            Mobile
+          </div>
+
+          <div
             className={`menu-item ${currentView === 'catalog' ? 'active' : ''}`}
             onClick={() => { setCurrentView('catalog'); setActiveProjectId(null); }}
           >
@@ -247,7 +303,7 @@ export default function App() {
                 onClick={() => setCurrentView('project-detail')}
               >
                 <Briefcase size={18} />
-                Job Workspace
+                Project Workspace
               </div>
               
               <div 
@@ -297,7 +353,7 @@ export default function App() {
             {currentView === 'dashboard' && 'Dashboard Overview'}
             {currentView === 'clients' && 'Clients database'}
             {currentView === 'quote-builder' && `Quote Estimator : ${activeProject?.name || 'New Estimate'}`}
-            {currentView === 'project-detail' && `Job Workspace : ${activeProject?.name || 'Project Overview'}`}
+            {currentView === 'project-detail' && `Project Workspace : ${activeProject?.name || 'Project Overview'}`}
             {currentView === 'settings' && 'System Configuration'}
             {currentView === 'ai-chat' && 'AI Voice Assistant'}
             {currentView === 'catalog' && 'Price Catalog'}
@@ -319,7 +375,7 @@ export default function App() {
             {activeProject && currentView !== 'dashboard' && currentView !== 'clients' && currentView !== 'settings' && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <span className="badge badge-quoting" style={{ fontSize: '11px', fontFamily: 'var(--font-mono)' }}>
-                  JOB ID: {activeProject.id.toUpperCase()}
+                  PROJECT ID: {activeProject.id.toUpperCase()}
                 </span>
                 <span className={`badge badge-${activeProject.status}`} style={{ fontSize: '11px' }}>
                   {activeProject.status}
@@ -328,7 +384,7 @@ export default function App() {
             )}
             
             <div style={{ fontSize: '13px', color: 'var(--text-secondary)', fontWeight: '500' }}>
-              {settings.companyName || 'Apex Remodeling'}
+              {settings.companyName || 'My Business'}
             </div>
           </div>
         </header>

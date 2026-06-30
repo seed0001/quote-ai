@@ -7,11 +7,14 @@ const SETTINGS_KEY = 'quote_ai_settings';
 const CATALOG_KEY = 'quote_ai_catalog';
 
 const DEFAULT_SETTINGS = {
-  companyName: 'Apex Remodeling & Design',
-  contractorName: 'Alex Mercer',
-  email: 'alex@apexremodeling.com',
-  phone: '(555) 382-9901',
-  address: '842 Craftsman Way, Suite 100\nAustin, TX 78701',
+  companyName: 'My Business',
+  businessType: 'General products and services',
+  businessDescription: 'Describe what your business sells, delivers, or manages so the AI can tailor quotes and project outlines.',
+  personaStatement: '',
+  contractorName: '',
+  email: '',
+  phone: '',
+  address: '',
   defaultLaborRate: 85.00,
   defaultMarkupPercent: 20.0,
   defaultTaxPercent: 8.25,
@@ -20,6 +23,10 @@ const DEFAULT_SETTINGS = {
   proposalTerms: 'A 50% deposit is required to schedule work; the balance is due upon completion. This proposal is valid for 30 days from the date above.',
   openRouterKey: '',
   openRouterModel: 'openrouter/auto',
+  fishAudioKey: '',
+  fishAudioModel: 's2.1-pro-free',
+  fishVoiceId: '',
+  fishVoiceName: '',
 };
 
 const MOCK_CLIENTS = [
@@ -193,16 +200,16 @@ const MOCK_PROJECTS = [
 // INITIALIZATION
 export const initDataStore = () => {
   if (!localStorage.getItem(PROJECTS_KEY)) {
-    localStorage.setItem(PROJECTS_KEY, JSON.stringify(MOCK_PROJECTS));
+    localStorage.setItem(PROJECTS_KEY, JSON.stringify([]));
   }
   if (!localStorage.getItem(CLIENTS_KEY)) {
-    localStorage.setItem(CLIENTS_KEY, JSON.stringify(MOCK_CLIENTS));
+    localStorage.setItem(CLIENTS_KEY, JSON.stringify([]));
   }
   if (!localStorage.getItem(SETTINGS_KEY)) {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(DEFAULT_SETTINGS));
   }
   if (!localStorage.getItem(CATALOG_KEY)) {
-    localStorage.setItem(CATALOG_KEY, JSON.stringify(DEFAULT_CATALOG));
+    localStorage.setItem(CATALOG_KEY, JSON.stringify([]));
   }
 };
 
@@ -213,7 +220,7 @@ export const getProjects = () => {
     return JSON.parse(localStorage.getItem(PROJECTS_KEY));
   } catch (e) {
     console.error('Error parsing projects data', e);
-    return MOCK_PROJECTS;
+    return [];
   }
 };
 
@@ -223,14 +230,22 @@ export const getClients = () => {
     return JSON.parse(localStorage.getItem(CLIENTS_KEY));
   } catch (e) {
     console.error('Error parsing clients data', e);
-    return MOCK_CLIENTS;
+    return [];
   }
 };
 
 export const getSettings = () => {
   initDataStore();
   try {
-    return JSON.parse(localStorage.getItem(SETTINGS_KEY));
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY));
+    return {
+      ...DEFAULT_SETTINGS,
+      ...saved,
+      // Migrate earlier builds that predated the S2.1 Pro Free API release.
+      fishAudioModel: saved?.fishAudioModel === 's2.1-pro-free'
+        ? saved.fishAudioModel
+        : 's2.1-pro-free',
+    };
   } catch (e) {
     console.error('Error parsing settings data', e);
     return DEFAULT_SETTINGS;
@@ -243,8 +258,18 @@ export const getCatalog = () => {
     return JSON.parse(localStorage.getItem(CATALOG_KEY)) || [];
   } catch (e) {
     console.error('Error parsing catalog data', e);
-    return DEFAULT_CATALOG;
+    return [];
   }
+};
+
+export const masterResetData = () => {
+  const appKeys = [];
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (key?.startsWith('quote_ai_')) appKeys.push(key);
+  }
+  appKeys.forEach((key) => localStorage.removeItem(key));
+  sessionStorage.clear();
 };
 
 // SETTERS / WRITERS
@@ -420,7 +445,8 @@ export const calculateQuoteTotals = (project, settings) => {
   const markupAmount = directCost * (markupPercent / 100);
   const grossSubtotal = directCost + markupAmount;
   
-  const taxAmount = subtotalMaterials * (taxPercent / 100); // Usually tax is materials only in contracting, or we can tax everything. Let's tax materials.
+  // The legacy `materials` field represents the taxable unit-price subtotal.
+  const taxAmount = subtotalMaterials * (taxPercent / 100);
   const grandTotal = grossSubtotal + taxAmount;
 
   // Calculate change orders
@@ -581,7 +607,7 @@ export const dispatchNLPActions = (actions, callbacks) => {
           const newItem = {
             id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
             category: payload.category || product?.category || 'Other',
-            name: payload.name || product?.name || 'Remodel Scope Task',
+            name: payload.name || product?.name || 'Custom Quote Item',
             unit: payload.unit || product?.unit || 'each',
             quantity: evaluateExpression(payload.quantity) || 1,
             materialCost: resolveMaterialCost(payload),

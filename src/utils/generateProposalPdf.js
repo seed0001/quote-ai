@@ -50,7 +50,7 @@ export function generateProposalPdf(project, client, settings) {
   }
 
   doc.setFont('helvetica', 'bold').setFontSize(18).setTextColor(...INK);
-  doc.text((settings.companyName || 'Apex Remodeling').toUpperCase(), headerTextX, y + 16);
+  doc.text((settings.companyName || 'MY BUSINESS').toUpperCase(), headerTextX, y + 16);
   doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(...MUTED);
   const companyLines = [
     ...(settings.address ? settings.address.split('\n') : []),
@@ -65,7 +65,7 @@ export function generateProposalPdf(project, client, settings) {
   doc.setFont('helvetica', 'normal').setFontSize(9).setTextColor(...INK);
   const validUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
   doc.text([
-    `Job ID: ${(project.id || '').toUpperCase()}`,
+    `Project ID: ${(project.id || '').toUpperCase()}`,
     `Date: ${new Date().toLocaleDateString()}`,
     `Valid Until: ${validUntil.toLocaleDateString()}`
   ], rightX, y + 30, { align: 'right' });
@@ -86,14 +86,14 @@ export function generateProposalPdf(project, client, settings) {
   ].filter(Boolean);
   doc.text(preparedFor, margin, y + 15);
   const scopeBlock = [
-    project.name || 'Remodel Project',
+    project.name || 'Client Project',
     project.startDate ? `Estimated Start: ${project.startDate}` : null
   ].filter(Boolean);
   doc.text(scopeBlock, pageW / 2, y + 15);
 
   y += 15 + Math.max(preparedFor.length, scopeBlock.length) * 13 + 14;
 
-  // --- Room-by-room scope tables ---
+  // --- Section-by-section scope tables ---
   (project.rooms || []).forEach(room => {
     if (!room.items || room.items.length === 0) return;
     const body = room.items.map(item => [
@@ -146,7 +146,7 @@ export function generateProposalPdf(project, client, settings) {
   }
 
   // --- Pricing summary (right-aligned) ---
-  const summaryRows = [['Base Remodel Proposal:', money(totals.baseTotal)]];
+  const summaryRows = [['Base Project Proposal:', money(totals.baseTotal)]];
   if (totals.approvedChangeOrdersTotal > 0) {
     summaryRows.push(['Approved Change Orders:', '+ ' + money(totals.approvedChangeOrdersTotal)]);
   }
@@ -167,7 +167,7 @@ export function generateProposalPdf(project, client, settings) {
   doc.text(money(totals.netTotal), rightX, y, { align: 'right' });
   y += 12;
   doc.setFont('helvetica', 'normal').setFontSize(8).setTextColor(...MUTED);
-  doc.text('Includes all local materials sales tax.', rightX, y, { align: 'right' });
+  doc.text('Includes applicable sales tax.', rightX, y, { align: 'right' });
   y += 24;
 
   // --- Deposit + terms ---
@@ -191,7 +191,7 @@ export function generateProposalPdf(project, client, settings) {
   doc.line(margin, y, margin + sigW, y);
   doc.line(rightX - sigW, y, rightX, y);
   doc.setFont('helvetica', 'bold').setFontSize(9).setTextColor(...INK);
-  doc.text(`${settings.companyName || 'Apex Remodeling'} Representative`, margin, y + 13);
+  doc.text(`${settings.companyName || 'My Business'} Representative`, margin, y + 13);
   doc.text(`Client Acceptance (${client?.name || ''})`, rightX - sigW, y + 13);
   doc.setFont('helvetica', 'normal').setFontSize(8).setTextColor(...MUTED);
   doc.text('Signature & Date', margin, y + 25);

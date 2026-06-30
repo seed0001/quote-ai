@@ -300,7 +300,7 @@ export default function Dashboard({
                   <input 
                     type="text" 
                     className="input-field" 
-                    placeholder="e.g. Master Bath Remodel or Kitchen Refacing"
+                    placeholder="e.g. Website Launch, Catering Package, Equipment Order"
                     value={newJobName}
                     onChange={(e) => setNewJobName(e.target.value)}
                     required

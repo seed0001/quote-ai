@@ -65,7 +65,7 @@ export default function QuoteBuilder({
 
   // Delete a room section
   const handleDeleteRoom = (roomIdx) => {
-    if (window.confirm(`Are you sure you want to delete the entire room scope for "${project.rooms[roomIdx].name}"?`)) {
+    if (window.confirm(`Are you sure you want to delete the entire section "${project.rooms[roomIdx].name}"?`)) {
       const updatedRooms = project.rooms.filter((_, idx) => idx !== roomIdx);
       onUpdateProject({
         ...project,
@@ -129,7 +129,7 @@ export default function QuoteBuilder({
     const newItem = {
       id: `item-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       category: 'Other',
-      name: 'Custom Remodel Task',
+      name: 'Custom Quote Item',
       unit: 'each',
       quantity: 1,
       materialCost: 0,
@@ -204,7 +204,7 @@ export default function QuoteBuilder({
             )}
             <div>
               <h1 style={{ fontSize: '24px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '8px' }}>
-                {settings.companyName || 'Apex Remodeling'}
+                {settings.companyName || 'My Business'}
               </h1>
               <div style={{ whiteSpace: 'pre-line', color: '#444' }}>
                 {settings.address}
@@ -217,7 +217,7 @@ export default function QuoteBuilder({
           <div style={{ textAlign: 'right' }}>
             <h2 style={{ fontSize: '18px', fontWeight: '700', textTransform: 'uppercase', color: 'var(--accent)', marginBottom: '8px' }}>PROPOSAL</h2>
             <div style={{ fontFamily: 'var(--font-mono)' }}>
-              <div><strong>Job ID:</strong> {project.id.toUpperCase()}</div>
+              <div><strong>Project ID:</strong> {project.id.toUpperCase()}</div>
               <div><strong>Date:</strong> {new Date().toLocaleDateString()}</div>
               <div><strong>Valid Until:</strong> {new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toLocaleDateString()}</div>
             </div>
@@ -332,7 +332,7 @@ export default function QuoteBuilder({
         <div style={{ marginTop: '50px', borderTop: '2px solid #000', paddingTop: '20px', display: 'flex', justifyContent: 'flex-end' }}>
           <div style={{ width: '300px', fontSize: '13px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0' }}>
-              <span>Base Remodel Proposal:</span>
+              <span>Base Project Proposal:</span>
               <span style={{ fontFamily: 'var(--font-mono)' }}>
                 {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(totals.baseTotal)}
               </span>
@@ -354,7 +354,7 @@ export default function QuoteBuilder({
               </span>
             </div>
             <div style={{ fontSize: '10px', color: '#666', marginTop: '8px', textAlign: 'right' }}>
-              Includes all local materials sales tax.
+              Includes applicable sales tax.
             </div>
           </div>
         </div>
@@ -377,7 +377,7 @@ export default function QuoteBuilder({
         {/* Signatures */}
         <div style={{ marginTop: '100px', display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
           <div style={{ width: '45%', borderTop: '1px solid #000', paddingTop: '10px' }}>
-            <strong>Apex Remodeling Representative</strong>
+            <strong>{settings.companyName || 'Business'} Representative</strong>
             <div style={{ color: '#666', fontSize: '11px', marginTop: '4px' }}>Signature & Date</div>
           </div>
           <div style={{ width: '45%', borderTop: '1px solid #000', paddingTop: '10px' }}>
@@ -422,9 +422,9 @@ export default function QuoteBuilder({
           {/* Room Selection tabs */}
           <div className="panel" style={{ marginBottom: 0 }}>
             <div className="panel-header" style={{ marginBottom: '16px' }}>
-              <h2 className="panel-title">Estimation Rooms / Sections</h2>
+              <h2 className="panel-title">Estimate Sections / Workstreams</h2>
               <button className="btn btn-secondary btn-sm" onClick={() => setShowAddRoom(true)}>
-                <Plus size={14} /> New Room
+                <Plus size={14} /> New Section
               </button>
             </div>
 
@@ -445,7 +445,7 @@ export default function QuoteBuilder({
                 <input
                   type="text"
                   className="input-field"
-                  placeholder="e.g. Master Bedroom, Decking"
+                  placeholder="e.g. Discovery, Design, Equipment, Delivery"
                   value={newRoomName}
                   onChange={(e) => setNewRoomName(e.target.value)}
                   style={{ flex: 1, padding: '6px 12px', fontSize: '13px' }}
@@ -472,7 +472,7 @@ export default function QuoteBuilder({
                   onClick={() => handleDeleteRoom(activeRoomIndex)}
                   disabled={project.rooms.length <= 1}
                 >
-                  <Trash2 size={12} /> Delete Room
+                  <Trash2 size={12} /> Delete Section
                 </button>
               </div>
 
@@ -485,7 +485,7 @@ export default function QuoteBuilder({
                       <th style={{ width: '12%' }}>Qty</th>
                       <th style={{ width: '10%' }}>Unit</th>
                       <th style={{ width: '16%' }}>Mat Cost ($)</th>
-                      <th style={{ width: '16%' }}>Labor Hours</th>
+                      <th style={{ width: '16%' }}>Service / Labor Hours</th>
                       <th style={{ width: '6%', textAlign: 'center' }}></th>
                     </tr>
                   </thead>
@@ -602,7 +602,7 @@ export default function QuoteBuilder({
                     <option value="">-- Choose Template Item --</option>
                     {categoryTemplates.map(t => (
                       <option key={t.id} value={t.id}>
-                        {t.name} (Mat: ${t.materialCost} / Lab: {t.laborHours}h)
+                        {t.name} (Unit: ${t.materialCost} / Time: {t.laborHours}h)
                       </option>
                     ))}
                   </select>
@@ -629,7 +629,7 @@ export default function QuoteBuilder({
             <h2 className="panel-title" style={{ marginBottom: '16px' }}>Project Financial Parameters</h2>
             
             <div className="form-group">
-              <label className="form-label">Labor Rate ($/Hour)</label>
+              <label className="form-label">Service / Labor Rate ($/Hour)</label>
               <div className="input-group">
                 <span className="input-addon">$</span>
                 <input 
@@ -687,14 +687,14 @@ export default function QuoteBuilder({
             </h2>
             
             <div className="totals-row">
-              <span>Materials Cost Subtotal:</span>
+              <span>Products / Services Subtotal:</span>
               <span style={{ fontFamily: 'var(--font-mono)' }}>
                 {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(totals.materials)}
               </span>
             </div>
 
             <div className="totals-row">
-              <span>Labor Estimate ({totals.laborHours.toFixed(1)} hrs):</span>
+              <span>Service / Labor Estimate ({totals.laborHours.toFixed(1)} hrs):</span>
               <span style={{ fontFamily: 'var(--font-mono)' }}>
                 {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(totals.laborCost)}
               </span>
@@ -717,7 +717,7 @@ export default function QuoteBuilder({
             </div>
 
             <div className="totals-row">
-              <span>Materials Tax ({totals.taxPercent}%):</span>
+              <span>Taxable Items ({totals.taxPercent}%):</span>
               <span style={{ fontFamily: 'var(--font-mono)' }}>
                 + {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(totals.taxAmount)}
               </span>

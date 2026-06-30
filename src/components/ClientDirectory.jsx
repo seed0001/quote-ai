@@ -259,7 +259,7 @@ export default function ClientDirectory({
                               className="btn btn-secondary btn-sm"
                               style={{ padding: '4px 8px' }}
                               onClick={() => onViewProject(p.id)}
-                              title="Open Job Workspace"
+                              title="Open Project Workspace"
                             >
                               <Briefcase size={12} />
                             </button>

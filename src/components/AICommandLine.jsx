@@ -19,7 +19,7 @@ export default function AICommandLine({
   const [showStatusPanel, setShowStatusPanel] = useState(false);
   const statusTimerRef = useRef(null);
 
-  const hasApiKey = !!settings.openRouterKey;
+  const hasApiKey = !!(settings.openRouterConfigured || settings.openRouterKey);
 
   // Clear timers on unmount
   useEffect(() => {
@@ -72,6 +72,12 @@ export default function AICommandLine({
       const activeProjectName = projects.find(p => p.id === activeProjectId)?.name || 'None';
 
       const promptContext = {
+        businessProfile: {
+          companyName: settings.companyName || 'My Business',
+          businessType: settings.businessType || 'General products and services',
+          businessDescription: settings.businessDescription || 'A flexible business that creates project quotes for clients.',
+          personaStatement: settings.personaStatement || 'Be clear, practical, professional, and attentive to the user.'
+        },
         currentDate: new Date().toISOString().slice(0, 10),
         currentTime: new Date().toLocaleTimeString(),
         currentView,
@@ -82,15 +88,16 @@ export default function AICommandLine({
       };
 
       // 2. Formulate system prompt with strict schemas
-      const systemPrompt = `You are the Natural Language Processing (NLP) core for Apex Estimate, a remodeling contractor job workspace.
-Your job is to translate the user's instructions into a structured array of JSON actions to execute, and formulate a professional contractor-style confirmation message.
+      const systemPrompt = `You are the Natural Language Processing (NLP) core for QuoteFlow, a flexible quoting and project workspace for any line of business.
+Your job is to translate the user's instructions into a structured array of JSON actions and formulate a concise professional confirmation. Adapt to the configured business profile. Treat roomName as a generic project section such as a phase, package, deliverable, location, department, or workstream.
+Follow the personaStatement in the business profile for tone and behavior unless it conflicts with accuracy or these action rules.
 
 Current Application Context:
 ${JSON.stringify(promptContext, null, 2)}
 
 You MUST return a JSON object with exactly two fields:
 1. "actions": An array of command objects. If no action is needed, return an empty array.
-2. "response": A string outlining the changes made or any clarification questions. Speak directly to the contractor in a helpful, clean tone.
+2. "response": A string outlining the changes made or any clarification questions. Speak directly to the user in a helpful, clean tone.
 
 Available Action Types and Payloads:
 - { "type": "CREATE_CLIENT", "payload": { "name": string, "company": string, "email": string, "phone": string, "address": string, "notes": string } }
@@ -98,7 +105,7 @@ Available Action Types and Payloads:
 - { "type": "DELETE_CLIENT", "payload": { "id": string } }
 - { "type": "CREATE_PROJECT", "payload": { "name": string, "clientId": string, "status": "lead"|"quoting"|"scheduled"|"progress"|"completed" } }
 - { "type": "UPDATE_PROJECT_STATUS", "payload": { "id": string, "status": "lead"|"quoting"|"scheduled"|"progress"|"completed" } }
-- { "type": "ADD_QUOTE_ITEM", "payload": { "projectId": string, "roomName": string (e.g. "Kitchen"), "name": string, "category": string, "quantity": number|string, "unit": string, "materialCost": number|string, "laborHours": number|string } }
+- { "type": "ADD_QUOTE_ITEM", "payload": { "projectId": string, "roomName": string (a project section or phase), "name": string, "category": string, "quantity": number|string, "unit": string, "materialCost": number|string, "laborHours": number|string } }
 - { "type": "UPDATE_QUOTE_ITEM", "payload": { "projectId": string, "itemId": string, "name": string, "category": string, "quantity": number|string, "unit": string, "materialCost": number|string, "laborHours": number|string } }
 - { "type": "DELETE_QUOTE_ITEM", "payload": { "projectId": string, "itemId": string } }
 - { "type": "ADD_CHECKLIST_ITEM", "payload": { "projectId": string, "text": string } }
@@ -126,13 +133,12 @@ Rules:
         response_format: { type: 'json_object' }
       };
 
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      const response = await fetch('/api/openrouter/api/v1/chat/completions', {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${settings.openRouterKey}`,
           'Content-Type': 'application/json',
           'HTTP-Referer': 'http://localhost:5173/',
-          'X-Title': 'Apex Remodel Estimate'
+          'X-Title': 'QuoteFlow Business Estimate'
         },
         body: JSON.stringify(requestBody)
       });

@@ -478,7 +478,7 @@ export default function ProjectDetail({
                               <th>Description</th>
                               <th style={{ width: '15%' }}>Qty</th>
                               <th style={{ width: '15%' }}>Mat Cost ($)</th>
-                              <th style={{ width: '15%' }}>Labor Hrs</th>
+                              <th style={{ width: '15%' }}>Service Hrs</th>
                               <th style={{ width: '5%' }}></th>
                             </tr>
                           </thead>
@@ -591,7 +591,7 @@ export default function ProjectDetail({
                           <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0' }}>
                             <span>• {item.name} (Qty: {item.quantity} {item.unit})</span>
                             <span style={{ fontFamily: 'var(--font-mono)' }}>
-                              Material cost: ${item.materialCost}/unit | Labor: {item.laborHours} hrs/unit
+                              Unit price: ${item.materialCost}/unit | Service time: {item.laborHours} hrs/unit
                             </span>
                           </div>
                         ))}
