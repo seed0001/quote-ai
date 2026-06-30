@@ -12,17 +12,20 @@ import {
   BriefcaseBusiness,
   MessageSquare,
   Package,
-  Smartphone
+  Smartphone,
+  CalendarDays
 } from 'lucide-react';
 import {
   getProjects,
   getClients,
   getSettings,
   getCatalog,
+  getTasks,
   saveProjects,
   saveClients,
   saveSettings,
   saveCatalog,
+  saveTasks,
   initDataStore,
   hydrateFromHost
 } from './utils/dataStore';
@@ -36,6 +39,7 @@ import AIChat from './components/AIChat';
 import PriceCatalog from './components/PriceCatalog';
 import Calculator from './components/Calculator';
 import Mobile from './components/Mobile';
+import CalendarView from './components/CalendarView';
 
 export default function App() {
   const [currentView, setCurrentView] = useState('dashboard');
@@ -43,6 +47,7 @@ export default function App() {
   const [clients, setClients] = useState([]);
   const [settings, setSettings] = useState({});
   const [catalog, setCatalog] = useState([]);
+  const [tasks, setTasks] = useState([]);
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [theme, setTheme] = useState('dark');
 
@@ -54,10 +59,12 @@ export default function App() {
     setProjects(getProjects());
     setClients(getClients());
     setCatalog(getCatalog());
+    setTasks(getTasks());
     hydrateFromHost().then(() => {
       setProjects(getProjects());
       setClients(getClients());
       setCatalog(getCatalog());
+      setTasks(getTasks());
     });
     const localSettings = getSettings();
     setSettings(localSettings);
@@ -120,6 +127,11 @@ export default function App() {
   const handleUpdateCatalog = (newCatalog) => {
     setCatalog(newCatalog);
     saveCatalog(newCatalog);
+  };
+
+  const handleUpdateTasks = (newTasks) => {
+    setTasks(newTasks);
+    saveTasks(newTasks);
   };
 
   const toggleTheme = () => {
@@ -218,18 +230,30 @@ export default function App() {
             onCatalogChange={handleUpdateCatalog}
           />
         );
+      case 'calendar':
+        return (
+          <CalendarView
+            tasks={tasks}
+            projects={projects}
+            clients={clients}
+            settings={settings}
+            onTasksChange={handleUpdateTasks}
+          />
+        );
       case 'ai-chat':
         return (
           <AIChat
             projects={projects}
             clients={clients}
             catalog={catalog}
+            tasks={tasks}
             settings={settings}
             activeProjectId={activeProjectId}
             currentView={currentView}
             onProjectsChange={handleUpdateProjects}
             onClientsChange={handleUpdateClients}
             onCatalogChange={handleUpdateCatalog}
+            onTasksChange={handleUpdateTasks}
             setCurrentView={setCurrentView}
             setActiveProjectId={setActiveProjectId}
           />
@@ -245,11 +269,13 @@ export default function App() {
         projects={projects}
         clients={clients}
         catalog={catalog}
+        tasks={tasks}
         settings={settings}
         activeProjectId={activeProjectId}
         onProjectsChange={handleUpdateProjects}
         onClientsChange={handleUpdateClients}
         onCatalogChange={handleUpdateCatalog}
+        onTasksChange={handleUpdateTasks}
         setActiveProjectId={setActiveProjectId}
         onExit={() => setCurrentView('dashboard')}
       />
@@ -304,6 +330,14 @@ export default function App() {
           >
             <Package size={18} />
             Price Catalog
+          </div>
+
+          <div
+            className={`menu-item ${currentView === 'calendar' ? 'active' : ''}`}
+            onClick={() => { setCurrentView('calendar'); setActiveProjectId(null); }}
+          >
+            <CalendarDays size={18} />
+            Calendar &amp; Tasks
           </div>
 
           {activeProjectId && (
@@ -378,6 +412,7 @@ export default function App() {
             onProjectsChange={handleUpdateProjects}
             onClientsChange={handleUpdateClients}
             onCatalogChange={handleUpdateCatalog}
+            onTasksChange={handleUpdateTasks}
             setCurrentView={setCurrentView}
             setActiveProjectId={setActiveProjectId}
           />

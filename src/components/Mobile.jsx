@@ -6,11 +6,13 @@ export default function Mobile({
   projects,
   clients,
   catalog,
+  tasks,
   settings,
   activeProjectId,
   onProjectsChange,
   onClientsChange,
   onCatalogChange,
+  onTasksChange,
   setActiveProjectId,
   onExit,
 }) {
@@ -36,12 +38,14 @@ export default function Mobile({
           projects={projects}
           clients={clients}
           catalog={catalog}
+          tasks={tasks}
           settings={settings}
           activeProjectId={activeProjectId}
           currentView="mobile"
           onProjectsChange={onProjectsChange}
           onClientsChange={onClientsChange}
           onCatalogChange={onCatalogChange}
+          onTasksChange={onTasksChange}
           setCurrentView={() => {}}
           setActiveProjectId={setActiveProjectId}
         />

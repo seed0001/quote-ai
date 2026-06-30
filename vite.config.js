@@ -8,7 +8,7 @@ const HOST_CONFIG_FILE = path.resolve(process.cwd(), '.quote-flow-host-config.js
 // (local or over the tunnel) reads and writes these files, so the data never
 // lives in an individual browser.
 const DATA_DIR = path.resolve(process.cwd(), 'quote-flow-data')
-const DATA_COLLECTIONS = ['projects', 'clients', 'catalog']
+const DATA_COLLECTIONS = ['projects', 'clients', 'catalog', 'tasks']
 const PUBLIC_CONFIG_FIELDS = [
   'companyName',
   'businessType',
@@ -28,6 +28,8 @@ const PUBLIC_CONFIG_FIELDS = [
   'fishAudioModel',
   'fishVoiceId',
   'fishVoiceName',
+  'notificationFromEmail',
+  'team',
 ]
 
 const readHostConfig = () => {
@@ -49,6 +51,7 @@ const publicHostConfig = () => {
     ...exposed,
     openRouterConfigured: Boolean(config.openRouterKey),
     fishAudioConfigured: Boolean(config.fishAudioKey),
+    resendConfigured: Boolean(config.resendKey),
   }
 }
 
@@ -148,9 +151,121 @@ const duckDuckGoSearch = async (query) => {
   return results
 }
 
+// ---- Email delivery (Resend) + autonomous reminder scheduler ------------
+const escapeHtml = (s) =>
+  String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+
+// Send one email through Resend. Returns { ok, error }. No-ops (ok:false) when
+// the key or recipient is missing so the scheduler can keep going.
+const sendEmail = async ({ apiKey, from, to, subject, html }) => {
+  if (!apiKey) return { ok: false, error: 'Resend not configured' }
+  if (!to) return { ok: false, error: 'No recipient' }
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from, to, subject, html }),
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) return { ok: false, error: data?.message || `Resend error ${response.status}` }
+    return { ok: true, id: data?.id }
+  } catch (error) {
+    return { ok: false, error: error.message }
+  }
+}
+
+const STATUS_LABELS = { todo: 'To Do', in_progress: 'In Progress', done: 'Completed' }
+
+const emailShell = (company, heading, bodyHtml) =>
+  `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#1a202c">
+    <h2 style="color:#2d3748">${escapeHtml(heading)}</h2>
+    ${bodyHtml}
+    <p style="margin-top:24px;color:#718096;font-size:12px">Sent automatically by ${escapeHtml(company || 'QuoteFlow')}.</p>
+  </div>`
+
+// The autonomous loop: every few minutes, look for tasks that are due soon or
+// have changed status and email the assignee (and the customer, if they opted
+// in). Bookkeeping fields on each task prevent duplicate sends. Runs only while
+// this server process is alive — that is the host's job.
+const runReminderScheduler = async () => {
+  const config = readHostConfig()
+  const apiKey = config.resendKey
+  if (!apiKey) return // nothing configured yet
+  const from = config.notificationFromEmail || 'QuoteFlow <onboarding@resend.dev>'
+  const company = config.companyName || 'QuoteFlow'
+
+  const tasks = readCollection('tasks')
+  if (tasks.length === 0) return
+  const clients = readCollection('clients')
+  const clientEmail = (id) => clients.find((c) => c.id === id)?.email || ''
+
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  let changed = false
+
+  for (const task of tasks) {
+    if (!task || typeof task !== 'object') continue
+    task.notify = task.notify || {}
+
+    const assignee = task.assigneeEmail || ''
+    const customer = task.customerOptIn ? clientEmail(task.clientId) : ''
+    const when = task.date ? `${task.date}${task.time ? ' ' + task.time : ''}` : 'unscheduled'
+
+    // First time we see a task, record its status silently so we only email on
+    // genuine *changes* afterwards (no blast when reminders are first enabled).
+    if (task.notify.lastStatus === undefined) {
+      task.notify.lastStatus = task.status || 'todo'
+      changed = true
+    } else if ((task.status || 'todo') !== task.notify.lastStatus && task.status !== 'done') {
+      const label = STATUS_LABELS[task.status] || task.status
+      const body = `<p>The status of <strong>${escapeHtml(task.title)}</strong> is now <strong>${escapeHtml(label)}</strong>.</p>
+        <p>Scheduled for: ${escapeHtml(when)}</p>`
+      await sendEmail({ apiKey, from, to: assignee, subject: `Update: ${task.title}`, html: emailShell(company, 'Task status updated', body) })
+      if (customer) {
+        await sendEmail({ apiKey, from, to: customer, subject: `Project update from ${company}`, html: emailShell(company, 'Your project was updated', `<p>Hello,</p><p>An update on your project: <strong>${escapeHtml(task.title)}</strong> is now <strong>${escapeHtml(label)}</strong>.</p>`) })
+      }
+      task.notify.lastStatus = task.status
+      changed = true
+    }
+
+    // Due reminder — fires once when within the lead window.
+    if (task.date && task.status !== 'done' && !task.notify.reminded) {
+      const due = new Date(`${task.date}T00:00:00`)
+      const lead = Number.isFinite(Number(task.reminderLeadDays)) ? Number(task.reminderLeadDays) : 1
+      const remindOn = new Date(due)
+      remindOn.setDate(due.getDate() - lead)
+      if (!Number.isNaN(due.getTime()) && today >= remindOn && today <= due) {
+        const body = `<p><strong>${escapeHtml(task.title)}</strong> is scheduled for <strong>${escapeHtml(when)}</strong>.</p>
+          ${task.description ? `<p>${escapeHtml(task.description)}</p>` : ''}`
+        await sendEmail({ apiKey, from, to: assignee, subject: `Reminder: ${task.title}`, html: emailShell(company, 'Upcoming task reminder', body) })
+        if (customer) {
+          await sendEmail({ apiKey, from, to: customer, subject: `Reminder from ${company}`, html: emailShell(company, 'Upcoming appointment', `<p>Hello,</p><p>This is a reminder that <strong>${escapeHtml(task.title)}</strong> is scheduled for <strong>${escapeHtml(when)}</strong>.</p>`) })
+        }
+        task.notify.reminded = new Date().toISOString()
+        changed = true
+      }
+    }
+  }
+
+  if (changed) writeCollection('tasks', tasks)
+}
+
+let schedulerStarted = false
+const startReminderScheduler = () => {
+  if (schedulerStarted) return
+  schedulerStarted = true
+  // Kick once shortly after boot, then every 5 minutes.
+  setTimeout(() => { runReminderScheduler().catch((e) => console.error('Scheduler error', e)) }, 10_000)
+  setInterval(() => { runReminderScheduler().catch((e) => console.error('Scheduler error', e)) }, 5 * 60 * 1000)
+}
+
 const hostConfigPlugin = {
   name: 'quote-flow-host-config',
   configureServer(server) {
+    startReminderScheduler()
     server.middlewares.use((req, res, next) => {
       const pathname = (req.url || '').split('?')[0]
       const allowed =
@@ -214,6 +329,7 @@ const hostConfigPlugin = {
           })
           if (incoming.openRouterKey) next.openRouterKey = incoming.openRouterKey
           if (incoming.fishAudioKey) next.fishAudioKey = incoming.fishAudioKey
+          if (incoming.resendKey) next.resendKey = incoming.resendKey
           fs.writeFileSync(HOST_CONFIG_FILE, JSON.stringify(next, null, 2), 'utf8')
           sendJson(res, 200, publicHostConfig())
         } catch (error) {
@@ -250,6 +366,16 @@ const hostConfigPlugin = {
           return
         }
 
+        // The reminder scheduler owns each task's `notify` bookkeeping. Never
+        // let a client write clobber it, or status/reminder emails misfire.
+        const preserveServerFields = (incoming, existing) => {
+          if (collection !== 'tasks') return incoming
+          const merged = { ...incoming }
+          delete merged.notify
+          if (existing && existing.notify !== undefined) merged.notify = existing.notify
+          return merged
+        }
+
         // POST /api/data/:collection — create one record.
         if (req.method === 'POST' && !id) {
           const record = JSON.parse((await readBody(req)) || '{}')
@@ -259,10 +385,11 @@ const hostConfigPlugin = {
           }
           const records = readCollection(collection)
           const index = records.findIndex((r) => r.id === record.id)
-          if (index === -1) records.push(record)
-          else records[index] = record // idempotent: treat repeat POST as upsert
+          const saved = preserveServerFields(record, index === -1 ? null : records[index])
+          if (index === -1) records.push(saved)
+          else records[index] = saved // idempotent: treat repeat POST as upsert
           writeCollection(collection, records)
-          sendJson(res, 200, record)
+          sendJson(res, 200, saved)
           return
         }
 
@@ -271,10 +398,11 @@ const hostConfigPlugin = {
           const record = JSON.parse((await readBody(req)) || '{}')
           const records = readCollection(collection)
           const index = records.findIndex((r) => r.id === id)
-          if (index === -1) records.push({ ...record, id })
-          else records[index] = { ...record, id }
+          const saved = preserveServerFields({ ...record, id }, index === -1 ? null : records[index])
+          if (index === -1) records.push(saved)
+          else records[index] = saved
           writeCollection(collection, records)
-          sendJson(res, 200, { ...record, id })
+          sendJson(res, 200, saved)
           return
         }
 
@@ -308,6 +436,45 @@ const hostConfigPlugin = {
         sendJson(res, 200, { query: query.trim(), results })
       } catch (error) {
         sendJson(res, 502, { error: `Search failed: ${error.message}` })
+      }
+    })
+
+    // Send a test email and force an immediate scheduler pass. Host-only, so a
+    // tunnel user can't use it to blast emails through the owner's account.
+    server.middlewares.use('/api/notify', async (req, res) => {
+      if (req.method !== 'POST') {
+        sendJson(res, 405, { error: 'Method not allowed' })
+        return
+      }
+      if (req.headers['cf-connecting-ip']) {
+        sendJson(res, 403, { error: 'Email tests can only be run from the hosting computer.' })
+        return
+      }
+      try {
+        const incoming = JSON.parse((await readBody(req)) || '{}')
+        const config = readHostConfig()
+        if (!config.resendKey) {
+          sendJson(res, 400, { error: 'Add a Resend API key in Settings first.' })
+          return
+        }
+        const from = config.notificationFromEmail || 'QuoteFlow <onboarding@resend.dev>'
+        const company = config.companyName || 'QuoteFlow'
+        const result = await sendEmail({
+          apiKey: config.resendKey,
+          from,
+          to: incoming.to,
+          subject: `Test email from ${company}`,
+          html: emailShell(company, 'Reminders are working', '<p>This confirms your QuoteFlow reminder emails are configured correctly.</p>'),
+        })
+        // Also run the scheduler now so any already-due tasks go out immediately.
+        runReminderScheduler().catch((e) => console.error('Scheduler error', e))
+        if (!result.ok) {
+          sendJson(res, 502, { error: result.error })
+          return
+        }
+        sendJson(res, 200, { sent: true, id: result.id })
+      } catch (error) {
+        sendJson(res, 400, { error: error.message })
       }
     })
   },

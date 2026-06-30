@@ -36,8 +36,43 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
   const [openRouterStatus, setOpenRouterStatus] = useState('');
   const [openRouterLoading, setOpenRouterLoading] = useState(false);
   
+  const [resendKey, setResendKey] = useState(settings.resendKey || '');
+  const [notificationFromEmail, setNotificationFromEmail] = useState(settings.notificationFromEmail || '');
+  const [team, setTeam] = useState(Array.isArray(settings.team) ? settings.team : []);
+  const [newMemberName, setNewMemberName] = useState('');
+  const [newMemberEmail, setNewMemberEmail] = useState('');
+  const [testEmail, setTestEmail] = useState('');
+  const [testStatus, setTestStatus] = useState('');
+
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [importStatus, setImportStatus] = useState({ type: '', message: '' });
+
+  const addTeamMember = () => {
+    const name = newMemberName.trim();
+    const memberEmail = newMemberEmail.trim();
+    if (!name) return;
+    setTeam((prev) => [...prev, { name, email: memberEmail }]);
+    setNewMemberName('');
+    setNewMemberEmail('');
+  };
+
+  const removeTeamMember = (idx) => setTeam((prev) => prev.filter((_, i) => i !== idx));
+
+  const sendTestEmail = async () => {
+    setTestStatus('Sending...');
+    try {
+      const response = await fetch('/api/notify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: testEmail.trim() }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'Failed to send.');
+      setTestStatus('Test email sent — check the inbox.');
+    } catch (error) {
+      setTestStatus(error.message);
+    }
+  };
 
   const loadOpenRouterModels = async (key = openRouterKey) => {
     setOpenRouterLoading(true);
@@ -130,6 +165,9 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
       fishVoiceName,
       openRouterKey,
       openRouterModel,
+      resendKey,
+      notificationFromEmail,
+      team,
     };
 
     try {
@@ -145,6 +183,7 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
         ...result,
         openRouterKey: '',
         fishAudioKey: '',
+        resendKey: '',
       });
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
@@ -656,6 +695,76 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
                 {fishStatus}
               </div>
             )}
+
+            <h3 style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)', margin: '28px 0 14px', letterSpacing: '0.5px' }}>
+              Reminders & Team (Email via Resend)
+            </h3>
+
+            <div className="form-group">
+              <label className="form-label">Resend API Key</label>
+              <input
+                type="password"
+                className="input-field"
+                placeholder={settings.resendConfigured ? 'Configured on hosting computer' : 'Paste your Resend API key (re_...)'}
+                value={resendKey}
+                onChange={(e) => setResendKey(e.target.value)}
+              />
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Powers autonomous task reminders and customer status updates. Stored only on the hosting computer.
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Send-From Address</label>
+              <input
+                type="text"
+                className="input-field"
+                placeholder="QuoteFlow <onboarding@resend.dev>"
+                value={notificationFromEmail}
+                onChange={(e) => setNotificationFromEmail(e.target.value)}
+              />
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Must be a verified Resend sender. Leave blank to use Resend's test address.
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Team Members</label>
+              {team.length > 0 && (
+                <div style={{ marginBottom: '8px' }}>
+                  {team.map((m, idx) => (
+                    <div key={`${m.email}-${idx}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12px', padding: '6px 8px', border: '1px solid var(--border-color)', borderRadius: '5px', marginBottom: '4px' }}>
+                      <span>{m.name} {m.email && <span style={{ color: 'var(--text-muted)' }}>· {m.email}</span>}</span>
+                      <button type="button" onClick={() => removeTeamMember(idx)} style={{ cursor: 'pointer', color: 'var(--danger)', background: 'none', border: 'none' }}>
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <input type="text" className="input-field" placeholder="Name" value={newMemberName} onChange={(e) => setNewMemberName(e.target.value)} />
+                <input type="email" className="input-field" placeholder="Email" value={newMemberEmail} onChange={(e) => setNewMemberEmail(e.target.value)} />
+                <button type="button" className="btn btn-secondary btn-sm" onClick={addTeamMember}>Add</button>
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Save to apply. Members appear as assignee options on the calendar.
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Send a Test Email</label>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <input type="email" className="input-field" placeholder="you@example.com" value={testEmail} onChange={(e) => setTestEmail(e.target.value)} />
+                <button type="button" className="btn btn-secondary btn-sm" onClick={sendTestEmail} disabled={!testEmail.trim()}>Send Test</button>
+              </div>
+              {testStatus && (
+                <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '6px' }}>{testStatus}</div>
+              )}
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Save your Resend key first. Test sending only works from the hosting computer.
+              </div>
+            </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginTop: '24px' }}>
               <button type="submit" className="btn btn-primary">

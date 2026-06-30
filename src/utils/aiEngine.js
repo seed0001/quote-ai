@@ -12,7 +12,8 @@
 const OPENROUTER_URL = '/api/openrouter/api/v1/chat/completions';
 
 const VALID_STATUSES = ['lead', 'quoting', 'scheduled', 'progress', 'completed'];
-const VALID_VIEWS = ['dashboard', 'clients', 'quote-builder', 'project-detail', 'settings'];
+const VALID_VIEWS = ['dashboard', 'clients', 'quote-builder', 'project-detail', 'settings', 'calendar'];
+const VALID_TASK_STATUSES = ['todo', 'in_progress', 'done'];
 
 const ACTION_SCHEMA = `Available Actions Schema:
 - { "type": "CREATE_CLIENT", "payload": { "name": string, "company": string, "email": string, "phone": string, "address": string, "notes": string, "id": string (optional temporary id, see rules) } }
@@ -32,11 +33,14 @@ const ACTION_SCHEMA = `Available Actions Schema:
 - { "type": "CREATE_CATALOG_ITEM", "payload": { "name": string, "category": string, "unit": string, "price": number|string, "store": string, "description": string, "id": string (optional temporary id, see rules) } } — add a reusable priced product/service/material to the Price Catalog. Use this when researching and building out the catalog. Set "price" only to a real figure (from web research or the user); the catalog price becomes authoritative for any quote item that references it.
 - { "type": "UPDATE_CATALOG_ITEM", "payload": { "id": string, "name": string, "category": string, "unit": string, "price": number|string, "store": string, "description": string } } — only include the fields you are changing.
 - { "type": "DELETE_CATALOG_ITEM", "payload": { "id": string } }
-- { "type": "SWITCH_VIEW", "payload": { "view": "dashboard"|"clients"|"quote-builder"|"project-detail"|"settings", "projectId": string (optional) } }`;
+- { "type": "CREATE_TASK", "payload": { "title": string, "description": string, "projectId": string (optional), "clientId": string (optional), "assigneeName": string, "assigneeEmail": string, "date": "YYYY-MM-DD", "time": "HH:MM" (optional 24h), "status": "todo"|"in_progress"|"done", "customerOptIn": boolean, "reminderLeadDays": number|string } } — schedule a project/quote into an actionable, assignable calendar task. The host AUTONOMOUSLY emails the assignee (and the customer, only if customerOptIn is true and the client has an email) a reminder reminderLeadDays before the date, and again whenever the status changes. Link to a project/client by id so customer updates can be sent.
+- { "type": "UPDATE_TASK", "payload": { "id": string, "title": string, "description": string, "assigneeName": string, "assigneeEmail": string, "date": "YYYY-MM-DD", "time": "HH:MM", "status": "todo"|"in_progress"|"done", "customerOptIn": boolean, "reminderLeadDays": number|string } } — include only the fields you are changing (e.g. just status).
+- { "type": "DELETE_TASK", "payload": { "id": string } }
+- { "type": "SWITCH_VIEW", "payload": { "view": "dashboard"|"clients"|"quote-builder"|"project-detail"|"settings"|"calendar", "projectId": string (optional) } }`;
 
 // Build the compact DB snapshot the model reasons over. Mirrors the prior
 // inline context-builder so the model sees the same shape it always has.
-export function buildContext({ projects, clients, catalog, activeProjectId, currentView, settings = {} }) {
+export function buildContext({ projects, clients, catalog, tasks = [], activeProjectId, currentView, settings = {} }) {
   const clientsCtx = clients.map(c => ({
     id: c.id,
     name: c.name,
@@ -74,6 +78,19 @@ export function buildContext({ projects, clients, catalog, activeProjectId, curr
     return summary;
   });
 
+  // Compact task list so the assistant can schedule, update, and reference tasks.
+  const tasksCtx = (tasks || []).map(t => ({
+    id: t.id,
+    title: t.title,
+    projectId: t.projectId || '',
+    clientId: t.clientId || '',
+    assigneeName: t.assigneeName || '',
+    date: t.date || '',
+    time: t.time || '',
+    status: t.status || 'todo',
+    customerOptIn: Boolean(t.customerOptIn)
+  }));
+
   const activeProjectName = projects.find(p => p.id === activeProjectId)?.name || 'None';
 
   return {
@@ -90,7 +107,8 @@ export function buildContext({ projects, clients, catalog, activeProjectId, curr
     activeProjectName,
     clients: clientsCtx,
     projects: projectsCtx,
-    priceCatalog: catalogCtx
+    priceCatalog: catalogCtx,
+    tasks: tasksCtx
   };
 }
 
@@ -284,7 +302,7 @@ async function callOpenRouter({ systemPrompt, history, userMessage, settings }) 
 // Reason why a single action is invalid, or null if it passes. `clientIds` and
 // `projectIds` are mutable sets seeded with existing ids and extended with ids
 // minted earlier in the same batch.
-function actionRejectionReason(action, clientIds, projectIds, catalogIds) {
+function actionRejectionReason(action, clientIds, projectIds, catalogIds, taskIds) {
   if (!action || typeof action !== 'object') return 'malformed action';
   const { type, payload = {} } = action;
   const badCatalogRef = (cid) => cid !== undefined && cid !== '' && !catalogIds.has(cid);
@@ -344,6 +362,18 @@ function actionRejectionReason(action, clientIds, projectIds, catalogIds) {
       return catalogIds.has(payload.id) ? null : `UPDATE_CATALOG_ITEM references unknown catalog product "${payload.id}"`;
     case 'DELETE_CATALOG_ITEM':
       return catalogIds.has(payload.id) ? null : `DELETE_CATALOG_ITEM references unknown catalog product "${payload.id}"`;
+    case 'CREATE_TASK':
+      if (!payload.title) return 'CREATE_TASK missing title';
+      if (payload.projectId && !projectIds.has(payload.projectId)) return `CREATE_TASK references unknown project "${payload.projectId}"`;
+      if (payload.clientId && !clientIds.has(payload.clientId)) return `CREATE_TASK references unknown client "${payload.clientId}"`;
+      if (payload.status && !VALID_TASK_STATUSES.includes(payload.status)) return `CREATE_TASK has invalid status "${payload.status}"`;
+      return null;
+    case 'UPDATE_TASK':
+      if (!taskIds.has(payload.id)) return `UPDATE_TASK references unknown task "${payload.id}"`;
+      if (payload.status && !VALID_TASK_STATUSES.includes(payload.status)) return `UPDATE_TASK has invalid status "${payload.status}"`;
+      return null;
+    case 'DELETE_TASK':
+      return taskIds.has(payload.id) ? null : `DELETE_TASK references unknown task "${payload.id}"`;
     case 'SWITCH_VIEW':
       return VALID_VIEWS.includes(payload.view) ? null : `SWITCH_VIEW has invalid view "${payload.view}"`;
     default:
@@ -379,9 +409,10 @@ export function validateActions(actions, context) {
   const clientIds = new Set(context.clients.map(c => c.id));
   const projectIds = new Set(context.projects.map(p => p.id));
   const catalogIds = new Set((context.priceCatalog || []).map(i => i.id));
+  const taskIds = new Set((context.tasks || []).map(t => t.id));
 
   for (const action of actions) {
-    const reason = actionRejectionReason(action, clientIds, projectIds, catalogIds);
+    const reason = actionRejectionReason(action, clientIds, projectIds, catalogIds, taskIds);
     if (reason) {
       rejected.push({ action, reason });
       continue;
@@ -391,6 +422,7 @@ export function validateActions(actions, context) {
     if (action.type === 'CREATE_CLIENT' && action.payload?.id) clientIds.add(action.payload.id);
     if (action.type === 'CREATE_PROJECT' && action.payload?.id) projectIds.add(action.payload.id);
     if (action.type === 'CREATE_CATALOG_ITEM' && action.payload?.id) catalogIds.add(action.payload.id);
+    if (action.type === 'CREATE_TASK' && action.payload?.id) taskIds.add(action.payload.id);
   }
 
   return { valid, rejected };

@@ -22,12 +22,14 @@ export default function AIChat({
   projects,
   clients,
   catalog,
+  tasks,
   settings,
   activeProjectId,
   currentView,
   onProjectsChange,
   onClientsChange,
   onCatalogChange,
+  onTasksChange,
   setCurrentView,
   setActiveProjectId
 }) {
@@ -247,7 +249,7 @@ export default function AIChat({
     setLoadingPhase('reasoning');
 
     try {
-      const context = buildContext({ projects, clients, catalog, activeProjectId, currentView, settings });
+      const context = buildContext({ projects, clients, catalog, tasks, activeProjectId, currentView, settings });
 
       // Dual pass: Pass 1 reasons & decides ACT vs CLARIFY, Pass 2 executes the
       // approved plan, then a deterministic gate validates the actions before dispatch.
@@ -265,6 +267,7 @@ export default function AIChat({
           setProjects: onProjectsChange,
           setClients: onClientsChange,
           setCatalog: onCatalogChange,
+          setTasks: onTasksChange,
           setCurrentView,
           setActiveProjectId
         });

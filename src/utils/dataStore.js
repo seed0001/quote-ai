@@ -8,6 +8,7 @@ const PROJECTS_KEY = 'quote_ai_projects';
 const CLIENTS_KEY = 'quote_ai_clients';
 const SETTINGS_KEY = 'quote_ai_settings';
 const CATALOG_KEY = 'quote_ai_catalog';
+const TASKS_KEY = 'quote_ai_tasks';
 
 const DEFAULT_SETTINGS = {
   companyName: 'My Business',
@@ -42,8 +43,8 @@ const DEFAULT_SETTINGS = {
 // per-record POST/PUT/DELETE calls so two employees editing at once don't
 // clobber each other's records.
 // ---------------------------------------------------------------------------
-const cache = { projects: [], clients: [], catalog: [] };
-const LOCAL_KEYS = { projects: PROJECTS_KEY, clients: CLIENTS_KEY, catalog: CATALOG_KEY };
+const cache = { projects: [], clients: [], catalog: [], tasks: [] };
+const LOCAL_KEYS = { projects: PROJECTS_KEY, clients: CLIENTS_KEY, catalog: CATALOG_KEY, tasks: TASKS_KEY };
 
 const mirrorLocal = (name) => {
   try {
@@ -102,6 +103,7 @@ export const initDataStore = () => {
   cache.projects = readLocal(PROJECTS_KEY);
   cache.clients = readLocal(CLIENTS_KEY);
   cache.catalog = readLocal(CATALOG_KEY);
+  cache.tasks = readLocal(TASKS_KEY);
   if (!localStorage.getItem(SETTINGS_KEY)) {
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(DEFAULT_SETTINGS));
@@ -122,9 +124,11 @@ export const hydrateFromHost = async () => {
     cache.projects = Array.isArray(data.projects) ? data.projects : [];
     cache.clients = Array.isArray(data.clients) ? data.clients : [];
     cache.catalog = Array.isArray(data.catalog) ? data.catalog : [];
+    cache.tasks = Array.isArray(data.tasks) ? data.tasks : [];
     mirrorLocal('projects');
     mirrorLocal('clients');
     mirrorLocal('catalog');
+    mirrorLocal('tasks');
     return true;
   } catch (e) {
     console.error('Host unreachable — using local fallback data.', e);
@@ -139,6 +143,8 @@ export const getProjects = () => cache.projects;
 export const getClients = () => cache.clients;
 
 export const getCatalog = () => cache.catalog;
+
+export const getTasks = () => cache.tasks;
 
 export const getSettings = () => {
   try {
@@ -161,6 +167,7 @@ export const masterResetData = () => {
   cache.projects = [];
   cache.clients = [];
   cache.catalog = [];
+  cache.tasks = [];
   const appKeys = [];
   for (let index = 0; index < localStorage.length; index += 1) {
     const key = localStorage.key(index);
@@ -178,6 +185,42 @@ export const saveProjects = (projects) => setCollection('projects', projects);
 export const saveClients = (clients) => setCollection('clients', clients);
 
 export const saveCatalog = (catalog) => setCollection('catalog', catalog);
+
+export const saveTasks = (tasks) => setCollection('tasks', tasks);
+
+export const addTask = (task) => {
+  const newTask = {
+    title: '', description: '', projectId: '', clientId: '',
+    assigneeName: '', assigneeEmail: '',
+    date: '', time: '', status: 'todo',
+    customerOptIn: false, reminderLeadDays: 1,
+    ...task,
+    id: task.id || `task-${Date.now()}`,
+    createdAt: task.createdAt || new Date().toISOString(),
+  };
+  cache.tasks = [...cache.tasks, newTask];
+  mirrorLocal('tasks');
+  postRecord('tasks', newTask);
+  return newTask;
+};
+
+export const updateTask = (updatedTask) => {
+  const index = cache.tasks.findIndex(t => t.id === updatedTask.id);
+  if (index === -1) return false;
+  // Merge so a partial update (e.g. status only) keeps the scheduler bookkeeping
+  // (the `notify` field the host writes) and other fields intact.
+  const merged = { ...cache.tasks[index], ...updatedTask };
+  cache.tasks = cache.tasks.map(t => (t.id === merged.id ? merged : t));
+  mirrorLocal('tasks');
+  putRecord('tasks', merged);
+  return true;
+};
+
+export const deleteTask = (id) => {
+  cache.tasks = cache.tasks.filter(t => t.id !== id);
+  mirrorLocal('tasks');
+  removeRecord('tasks', id);
+};
 
 export const saveSettings = (settings) => {
   try {
@@ -282,6 +325,7 @@ export const exportDataBackup = () => {
     projects: getProjects(),
     clients: getClients(),
     catalog: getCatalog(),
+    tasks: getTasks(),
     settings: getSettings(),
     exportedAt: new Date().toISOString(),
   };
@@ -305,6 +349,9 @@ export const importDataBackup = (jsonData) => {
     }
     if (data.catalog && Array.isArray(data.catalog)) {
       saveCatalog(data.catalog);
+    }
+    if (data.tasks && Array.isArray(data.tasks)) {
+      saveTasks(data.tasks);
     }
     if (data.settings && typeof data.settings === 'object') {
       saveSettings(data.settings);
@@ -416,6 +463,7 @@ export const dispatchNLPActions = (actions, callbacks) => {
   let clients = getClients();
   let settings = getSettings();
   let catalog = getCatalog();
+  let tasks = getTasks();
   let activeProjectId = null;
   let viewChanged = null;
 
@@ -681,6 +729,34 @@ export const dispatchNLPActions = (actions, callbacks) => {
         deleteCatalogItem(payload.id);
         catalog = getCatalog();
         callbacks.setCatalog?.(catalog);
+        break;
+      }
+      case 'CREATE_TASK': {
+        addTask({
+          ...payload,
+          reminderLeadDays: payload.reminderLeadDays !== undefined
+            ? evaluateExpression(payload.reminderLeadDays)
+            : 1,
+        });
+        tasks = getTasks();
+        callbacks.setTasks?.(tasks);
+        break;
+      }
+      case 'UPDATE_TASK': {
+        updateTask({
+          ...payload,
+          ...(payload.reminderLeadDays !== undefined
+            ? { reminderLeadDays: evaluateExpression(payload.reminderLeadDays) }
+            : {}),
+        });
+        tasks = getTasks();
+        callbacks.setTasks?.(tasks);
+        break;
+      }
+      case 'DELETE_TASK': {
+        deleteTask(payload.id);
+        tasks = getTasks();
+        callbacks.setTasks?.(tasks);
         break;
       }
       case 'SWITCH_VIEW': {
