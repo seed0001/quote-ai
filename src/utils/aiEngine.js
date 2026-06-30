@@ -29,6 +29,9 @@ const ACTION_SCHEMA = `Available Actions Schema:
 - { "type": "CREATE_CHANGE_ORDER", "payload": { "projectId": string, "title": string, "description": string, "items": [ { "name": string, "category": string, "quantity": number|string, "unit": string, "materialCost": number|string, "laborHours": number|string, "catalogId": string } ] } } — each item's catalogId works the same as in ADD_QUOTE_ITEM.
 - { "type": "APPROVE_CHANGE_ORDER", "payload": { "projectId": string, "changeOrderId": string } }
 - { "type": "REJECT_CHANGE_ORDER", "payload": { "projectId": string, "changeOrderId": string } }
+- { "type": "CREATE_CATALOG_ITEM", "payload": { "name": string, "category": string, "unit": string, "price": number|string, "store": string, "description": string, "id": string (optional temporary id, see rules) } } — add a reusable priced product/service/material to the Price Catalog. Use this when researching and building out the catalog. Set "price" only to a real figure (from web research or the user); the catalog price becomes authoritative for any quote item that references it.
+- { "type": "UPDATE_CATALOG_ITEM", "payload": { "id": string, "name": string, "category": string, "unit": string, "price": number|string, "store": string, "description": string } } — only include the fields you are changing.
+- { "type": "DELETE_CATALOG_ITEM", "payload": { "id": string } }
 - { "type": "SWITCH_VIEW", "payload": { "view": "dashboard"|"clients"|"quote-builder"|"project-detail"|"settings", "projectId": string (optional) } }`;
 
 // Build the compact DB snapshot the model reasons over. Mirrors the prior
@@ -124,9 +127,9 @@ Reason carefully about the user's latest message:
 - What are they actually trying to accomplish?
 - What do you already know (from the context and the conversation) versus what is genuinely missing?
 - For QUOTES especially, do NOT guess line items blindly. Decide whether you have enough scope to build a reliable estimate. Relevant details depend on the configured business, but commonly include deliverables or products, quantities, project sections or phases, service time, quality tier, deadlines, exclusions, and special requirements.
-- PRICING IS NOT GUESSWORK. Product, service, fee, rental, or other unit prices MUST come from the priceCatalog, or from a price the user explicitly stated. If a needed item is not in the catalog and no price was provided, CLARIFY. Never invent a unit price.
+- PRICING IS NOT GUESSWORK. A unit price MUST come from one of: the priceCatalog, a price the user stated, or current web research you actually performed. Never fabricate a price from memory. If you cannot obtain a reliable price for a needed item, CLARIFY.
 - TIME is the exception: you MAY estimate labor or service hours from relevant domain knowledge when reasonable. If the business does not bill by time, use zero hours.
-- WEB SEARCH: you may search the internet when you genuinely need current or external information that is NOT in the context or conversation — e.g. product specifications, building codes, vendor lookups, or general facts. Do NOT search for things already known, and remember a unit price still must come from the catalog or the user (a searched figure is only a reference, not an authoritative catalog price).
+- WEB SEARCH & CATALOG RESEARCH: you may search the internet for current external information — product specs, building codes, vendor and retailer pricing, or materials/services related to this business. When the user wants you to price items or build out the catalog for an upcoming project, research real current prices, then plan to add each item to the Price Catalog (name, category, unit, the researched price, and the store/source). Once an item is in the catalog its price is authoritative for quotes. Do NOT search for things already known, and never record a price you did not actually find or were not given.
 - If important details or any required unit price are missing, CLARIFY rather than act.
 - If you have enough to proceed, outline a concrete, ordered plan describing each database action to take.
 
@@ -167,7 +170,7 @@ ${ACTION_SCHEMA}
 
 Rules:
 - CRITICAL: You have access to a calculation engine. Never do math in your head. Instead, write the raw formula as a string in numeric payload fields (quantity, materialCost, laborHours, laborRate, markupPercent, taxPercent). For example: "quantity": "12 * 15 * 1.10" or "laborHours": "(180 / 50) * 1.5". The system solves them exactly.
-- CRITICAL PRICING: Unit prices are NOT yours to invent. For every cataloged product, service, fee, rental, or other line item, set its "catalogId"; the system then uses the catalog's authoritative unit price. If the user explicitly gave a price for an uncataloged item, put that exact number in materialCost. Otherwise omit it and ask for pricing.
+- CRITICAL PRICING: Unit prices are NOT yours to invent. For every cataloged product, service, fee, rental, or other line item, set its "catalogId"; the system then uses the catalog's authoritative unit price. If the plan researched a price for a NEW item, emit a CREATE_CATALOG_ITEM (assign it a temporary id like "cat-tmp-1", set the researched price and source store) and reference that same id as the catalogId of the quote item — this builds the catalog as you quote. If the user explicitly gave a price for an uncataloged item, put that exact number in materialCost. Otherwise omit it and ask for pricing.
 - TIME may be estimated when appropriate: laborHours represents billable or internal service time per unit. Use zero when time does not apply.
 - Resolve "this project" / "active job" to activeProjectId (${context.activeProjectId}).
 - Resolve named clients/projects to their existing IDs from the context.
@@ -335,6 +338,12 @@ function actionRejectionReason(action, clientIds, projectIds, catalogIds) {
     case 'REJECT_CHANGE_ORDER':
       if (!projectIds.has(payload.projectId)) return `${type} references unknown project "${payload.projectId}"`;
       return payload.changeOrderId ? null : `${type} missing changeOrderId`;
+    case 'CREATE_CATALOG_ITEM':
+      return payload.name ? null : 'CREATE_CATALOG_ITEM missing name';
+    case 'UPDATE_CATALOG_ITEM':
+      return catalogIds.has(payload.id) ? null : `UPDATE_CATALOG_ITEM references unknown catalog product "${payload.id}"`;
+    case 'DELETE_CATALOG_ITEM':
+      return catalogIds.has(payload.id) ? null : `DELETE_CATALOG_ITEM references unknown catalog product "${payload.id}"`;
     case 'SWITCH_VIEW':
       return VALID_VIEWS.includes(payload.view) ? null : `SWITCH_VIEW has invalid view "${payload.view}"`;
     default:
@@ -381,6 +390,7 @@ export function validateActions(actions, context) {
     // Register ids minted in this batch so later actions can reference them.
     if (action.type === 'CREATE_CLIENT' && action.payload?.id) clientIds.add(action.payload.id);
     if (action.type === 'CREATE_PROJECT' && action.payload?.id) projectIds.add(action.payload.id);
+    if (action.type === 'CREATE_CATALOG_ITEM' && action.payload?.id) catalogIds.add(action.payload.id);
   }
 
   return { valid, rejected };

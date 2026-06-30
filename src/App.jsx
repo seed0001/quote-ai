@@ -229,6 +229,7 @@ export default function App() {
             currentView={currentView}
             onProjectsChange={handleUpdateProjects}
             onClientsChange={handleUpdateClients}
+            onCatalogChange={handleUpdateCatalog}
             setCurrentView={setCurrentView}
             setActiveProjectId={setActiveProjectId}
           />
@@ -248,6 +249,7 @@ export default function App() {
         activeProjectId={activeProjectId}
         onProjectsChange={handleUpdateProjects}
         onClientsChange={handleUpdateClients}
+        onCatalogChange={handleUpdateCatalog}
         setActiveProjectId={setActiveProjectId}
         onExit={() => setCurrentView('dashboard')}
       />
@@ -375,6 +377,7 @@ export default function App() {
             currentView={currentView}
             onProjectsChange={handleUpdateProjects}
             onClientsChange={handleUpdateClients}
+            onCatalogChange={handleUpdateCatalog}
             setCurrentView={setCurrentView}
             setActiveProjectId={setActiveProjectId}
           />

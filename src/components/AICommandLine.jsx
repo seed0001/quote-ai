@@ -10,6 +10,7 @@ export default function AICommandLine({
   currentView,
   onProjectsChange,
   onClientsChange,
+  onCatalogChange,
   setCurrentView,
   setActiveProjectId
 }) {
@@ -163,6 +164,7 @@ Rules:
       dispatchNLPActions(parsedActions, {
         setProjects: onProjectsChange,
         setClients: onClientsChange,
+        setCatalog: onCatalogChange,
         setCurrentView,
         setActiveProjectId
       });

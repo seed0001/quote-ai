@@ -415,7 +415,7 @@ export const dispatchNLPActions = (actions, callbacks) => {
   let projects = getProjects();
   let clients = getClients();
   let settings = getSettings();
-  const catalog = getCatalog();
+  let catalog = getCatalog();
   let activeProjectId = null;
   let viewChanged = null;
 
@@ -656,6 +656,31 @@ export const dispatchNLPActions = (actions, callbacks) => {
             activeProjectId = pId;
           }
         }
+        break;
+      }
+      case 'CREATE_CATALOG_ITEM': {
+        addCatalogItem({
+          ...payload,
+          price: payload.price !== undefined ? evaluateExpression(payload.price) : 0,
+        });
+        // Refresh so a quote item created later this same turn can reference it.
+        catalog = getCatalog();
+        callbacks.setCatalog?.(catalog);
+        break;
+      }
+      case 'UPDATE_CATALOG_ITEM': {
+        updateCatalogItem({
+          ...payload,
+          ...(payload.price !== undefined ? { price: evaluateExpression(payload.price) } : {}),
+        });
+        catalog = getCatalog();
+        callbacks.setCatalog?.(catalog);
+        break;
+      }
+      case 'DELETE_CATALOG_ITEM': {
+        deleteCatalogItem(payload.id);
+        catalog = getCatalog();
+        callbacks.setCatalog?.(catalog);
         break;
       }
       case 'SWITCH_VIEW': {

@@ -10,6 +10,7 @@ export default function Mobile({
   activeProjectId,
   onProjectsChange,
   onClientsChange,
+  onCatalogChange,
   setActiveProjectId,
   onExit,
 }) {
@@ -40,6 +41,7 @@ export default function Mobile({
           currentView="mobile"
           onProjectsChange={onProjectsChange}
           onClientsChange={onClientsChange}
+          onCatalogChange={onCatalogChange}
           setCurrentView={() => {}}
           setActiveProjectId={setActiveProjectId}
         />

@@ -27,6 +27,7 @@ export default function AIChat({
   currentView,
   onProjectsChange,
   onClientsChange,
+  onCatalogChange,
   setCurrentView,
   setActiveProjectId
 }) {
@@ -263,6 +264,7 @@ export default function AIChat({
         dispatchNLPActions(result.actions, {
           setProjects: onProjectsChange,
           setClients: onClientsChange,
+          setCatalog: onCatalogChange,
           setCurrentView,
           setActiveProjectId
         });
