@@ -158,18 +158,34 @@ Rules:
 - Output ONLY the JSON object, with no markdown fences.`;
 }
 
-// Single OpenRouter chat call that returns the parsed JSON content object.
-async function callOpenRouter({ systemPrompt, history, userMessage, settings }) {
-  const requestBody = {
-    model: settings.openRouterModel || 'openrouter/auto',
-    messages: [
-      { role: 'system', content: systemPrompt },
-      ...(history || []),
-      { role: 'user', content: userMessage }
-    ],
-    response_format: { type: 'json_object' }
-  };
+// How many times to ask the model to repair its own output after the first
+// attempt fails to parse. Total model calls per pass = 1 + MAX_PARSE_RETRIES.
+const MAX_PARSE_RETRIES = 2;
+// Ceiling on output size so large action arrays can't get truncated mid-JSON
+// (truncation is the one failure the repair loop can't fully recover content for).
+const MAX_OUTPUT_TOKENS = 4096;
 
+// Tolerantly pull a JSON object from a model reply. Handles markdown fences and
+// leading/trailing prose by falling back to the widest {...} span. Throws a
+// SyntaxError (with position info) when the content still isn't valid JSON, so
+// the caller can feed that exact complaint back to the model for repair.
+function parseJsonLoose(text) {
+  const trimmed = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  try {
+    return JSON.parse(trimmed);
+  } catch (firstErr) {
+    const start = trimmed.indexOf('{');
+    const end = trimmed.lastIndexOf('}');
+    if (start !== -1 && end > start) {
+      // Re-parse the outermost object span; let this throw on real syntax errors.
+      return JSON.parse(trimmed.slice(start, end + 1));
+    }
+    throw firstErr;
+  }
+}
+
+// One OpenRouter chat round-trip. Returns the raw assistant content string.
+async function postChat(messages, settings) {
   const response = await fetch(OPENROUTER_URL, {
     method: 'POST',
     headers: {
@@ -177,7 +193,12 @@ async function callOpenRouter({ systemPrompt, history, userMessage, settings }) 
       'HTTP-Referer': 'http://localhost:5173/',
       'X-Title': 'QuoteFlow Business Estimate Chat'
     },
-    body: JSON.stringify(requestBody)
+    body: JSON.stringify({
+      model: settings.openRouterModel || 'openrouter/auto',
+      messages,
+      response_format: { type: 'json_object' },
+      max_tokens: MAX_OUTPUT_TOKENS
+    })
   });
 
   if (!response.ok) {
@@ -197,14 +218,45 @@ async function callOpenRouter({ systemPrompt, history, userMessage, settings }) 
   if (!contentText) {
     throw new Error('The model returned no content — it may not support JSON mode. Try pinning a specific model (e.g. Gemini 2.5 Flash or Claude 3.5 Sonnet) in System Settings instead of the auto-router.');
   }
+  return contentText;
+}
 
-  // Be tolerant of models that wrap JSON in markdown fences despite instructions.
-  const cleaned = contentText.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    throw new Error('The model did not return valid JSON. Try a model with reliable structured output (e.g. Gemini 2.5 Flash or Claude 3.5 Sonnet) in System Settings.');
+// Chat call with a self-repair loop: if the reply won't parse as JSON, we send
+// the model its own broken output plus the parser's exact error and ask it to
+// fix and re-emit. The full system prompt + context ride along on every retry,
+// so the model can correct a semantic slip (bad id, missing field) — not just a
+// stray comma. Returns the parsed JSON content object.
+async function callOpenRouter({ systemPrompt, history, userMessage, settings }) {
+  const baseMessages = [
+    { role: 'system', content: systemPrompt },
+    ...(history || []),
+    { role: 'user', content: userMessage }
+  ];
+
+  let lastContent = '';
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= MAX_PARSE_RETRIES; attempt++) {
+    const messages = attempt === 0
+      ? baseMessages
+      : [
+          ...baseMessages,
+          { role: 'assistant', content: lastContent },
+          {
+            role: 'user',
+            content: `Your previous response could not be parsed as JSON. The parser reported: "${lastError.message}". Re-read your previous message, locate and fix the error (e.g. a stray sentence, a trailing comma, a missing brace or quote, an unfinished value), and return ONLY the corrected, complete JSON object — no explanation, no markdown code fences.`
+          }
+        ];
+
+    lastContent = await postChat(messages, settings);
+    try {
+      return parseJsonLoose(lastContent);
+    } catch (err) {
+      lastError = err;
+    }
   }
+
+  throw new Error(`The model did not return valid JSON after ${MAX_PARSE_RETRIES + 1} attempts (last parser error: ${lastError?.message}). Try a model with reliable structured output (e.g. Gemini 2.5 Flash or Claude 3.5 Sonnet) in System Settings.`);
 }
 
 // Reason why a single action is invalid, or null if it passes. `clientIds` and
