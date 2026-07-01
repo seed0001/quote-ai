@@ -124,9 +124,12 @@ Rules:
 - If you switch a view, e.g. SWITCH_VIEW to quote-builder or project-detail, make sure to include the projectId in the payload.
 - Always output a valid JSON object containing ONLY "actions" and "response". Do not wrap the JSON in markdown code blocks (\`\`\`json ... \`\`\`).`;
 
-      // 3. Make fetch call to OpenRouter API
+      // 3. Make fetch call to OpenRouter API — only the user's selected model.
+      if (!settings.openRouterModel) {
+        throw new Error('No AI model is selected. Choose an OpenRouter model in System Settings first.');
+      }
       const requestBody = {
-        model: settings.openRouterModel || 'google/gemini-2.5-flash',
+        model: settings.openRouterModel,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: command.trim() }

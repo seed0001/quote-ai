@@ -19,7 +19,7 @@ const ACTION_SCHEMA = `Available Actions Schema:
 - { "type": "CREATE_CLIENT", "payload": { "name": string, "company": string, "email": string, "phone": string, "address": string, "notes": string, "id": string (optional temporary id, see rules) } }
 - { "type": "UPDATE_CLIENT", "payload": { "id": string, "name": string, "company": string, "email": string, "phone": string, "address": string, "notes": string } }
 - { "type": "DELETE_CLIENT", "payload": { "id": string } }
-- { "type": "CREATE_PROJECT", "payload": { "name": string, "clientId": string, "status": "lead"|"quoting"|"scheduled"|"progress"|"completed", "id": string (optional temporary id, see rules) } }
+- { "type": "CREATE_PROJECT", "payload": { "name": string, "clientId": string (optional), "status": "lead"|"quoting"|"scheduled"|"progress"|"completed", "id": string (optional temporary id, see rules) } }
 - { "type": "UPDATE_PROJECT_STATUS", "payload": { "id": string, "status": "lead"|"quoting"|"scheduled"|"progress"|"completed" } }
 - { "type": "UPDATE_PROJECT", "payload": { "id": string, "name": string, "clientId": string, "status": "lead"|"quoting"|"scheduled"|"progress"|"completed", "startDate": string, "endDate": string, "laborRate": number|string, "markupPercent": number|string, "taxPercent": number|string } } — use to RE-LINK a project to a different client (clientId), rename it, or change its dates/rates. Only include the fields you are changing.
 - { "type": "ADD_QUOTE_ITEM", "payload": { "projectId": string, "roomName": string, "name": string, "category": string, "quantity": number|string, "unit": string, "materialCost": number|string, "laborHours": number|string, "catalogId": string } } — catalogId is the id of a Price Catalog product; when set, the system fills the material unit price (and name/unit/category if omitted) from the catalog. ALWAYS set catalogId for any material that exists in the catalog.
@@ -148,6 +148,7 @@ Reason carefully about the user's latest message:
 - For QUOTES especially, do NOT guess line items blindly. Decide whether you have enough scope to build a reliable estimate. Relevant details depend on the configured business, but commonly include deliverables or products, quantities, project sections or phases, service time, quality tier, deadlines, exclusions, and special requirements.
 - PRICING IS NOT GUESSWORK. A unit price MUST come from one of: the priceCatalog, a price the user stated, or current web research you actually performed. Never fabricate a price from memory. If you cannot obtain a reliable price for a needed item, CLARIFY.
 - TIME is the exception: you MAY estimate labor or service hours from relevant domain knowledge when reasonable. If the business does not bill by time, use zero hours.
+- VISION & IMAGES: If the user provides an image of a business card, extract their details to plan a CREATE_CLIENT action. If the user provides an image of a project site, damage, or blueprint, analyze it to determine the scope of work and plan CREATE_PROJECT and ADD_QUOTE_ITEM actions.
 - WEB SEARCH & CATALOG RESEARCH: you may search the internet for current external information — product specs, building codes, vendor and retailer pricing, or materials/services related to this business. When the user wants you to price items or build out the catalog for an upcoming project, research real current prices, then plan to add each item to the Price Catalog (name, category, unit, the researched price, and the store/source). Once an item is in the catalog its price is authoritative for quotes. Do NOT search for things already known, and never record a price you did not actually find or were not given.
 - If important details or any required unit price are missing, CLARIFY rather than act.
 - If you have enough to proceed, outline a concrete, ordered plan describing each database action to take.
@@ -227,6 +228,19 @@ function parseJsonLoose(text) {
 
 // One OpenRouter chat round-trip. Returns the raw assistant content string.
 async function postChat(messages, settings) {
+  // Only ever use models the user picked in Settings. If a message carries an
+  // image and a dedicated vision model is set, use it; otherwise fall back to
+  // the user's main model (which for most modern models handles images too).
+  // No hardcoded model slugs anywhere — nothing can silently bill a model
+  // nobody chose, and no dead default slug can break image requests.
+  const hasImage = messages.some(m => Array.isArray(m.content) && m.content.some(c => c?.type === 'image_url'));
+  const targetModel = (hasImage && settings.openRouterVisionModel)
+    ? settings.openRouterVisionModel
+    : settings.openRouterModel;
+  if (!targetModel) {
+    throw new Error('No AI model is selected. Open System Settings and choose an OpenRouter model before using the assistant.');
+  }
+
   const response = await fetch(OPENROUTER_URL, {
     method: 'POST',
     headers: {
@@ -235,7 +249,7 @@ async function postChat(messages, settings) {
       'X-Title': 'QuoteFlow Business Estimate Chat'
     },
     body: JSON.stringify({
-      model: settings.openRouterModel || 'openrouter/auto',
+      model: targetModel,
       messages,
       response_format: { type: 'json_object' },
       max_tokens: MAX_OUTPUT_TOKENS
@@ -317,7 +331,7 @@ function actionRejectionReason(action, clientIds, projectIds, catalogIds, taskId
       return clientIds.has(payload.id) ? null : `DELETE_CLIENT references unknown client "${payload.id}"`;
     case 'CREATE_PROJECT':
       if (!payload.name) return 'CREATE_PROJECT missing name';
-      if (!clientIds.has(payload.clientId)) return `CREATE_PROJECT references unknown client "${payload.clientId}" — create the client first`;
+      if (payload.clientId !== undefined && !clientIds.has(payload.clientId)) return `CREATE_PROJECT references unknown client "${payload.clientId}" — create the client first`;
       if (payload.status && !VALID_STATUSES.includes(payload.status)) return `CREATE_PROJECT has invalid status "${payload.status}"`;
       return null;
     case 'UPDATE_PROJECT_STATUS':

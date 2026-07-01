@@ -27,10 +27,12 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
   const [fishVoiceSearch, setFishVoiceSearch] = useState('');
   const [fishStatus, setFishStatus] = useState('');
   const [fishLoading, setFishLoading] = useState(false);
-  const initialModel = settings.openRouterModel || 'openrouter/auto';
+  const initialModel = settings.openRouterModel || '';
+  const initialVisionModel = settings.openRouterVisionModel || '';
 
   const [openRouterKey, setOpenRouterKey] = useState(settings.openRouterKey || '');
   const [openRouterModel, setOpenRouterModel] = useState(initialModel);
+  const [openRouterVisionModel, setOpenRouterVisionModel] = useState(initialVisionModel);
   const [openRouterModels, setOpenRouterModels] = useState([]);
   const [openRouterModelSearch, setOpenRouterModelSearch] = useState('');
   const [openRouterStatus, setOpenRouterStatus] = useState('');
@@ -169,6 +171,7 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
       fishVoiceName,
       openRouterKey,
       openRouterModel,
+      openRouterVisionModel,
       resendKey,
       notificationFromEmail,
       team,
@@ -544,10 +547,10 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
             <div className="form-group">
               <label className="form-label">Preferred LLM Model</label>
               <select className="input-field" value={openRouterModel} onChange={(e) => setOpenRouterModel(e.target.value)}>
-                {openRouterModel && openRouterModel !== 'openrouter/auto' && !visibleOpenRouterModels.some((model) => model.id === openRouterModel) && (
+                <option value="">Select a model…</option>
+                {openRouterModel && !visibleOpenRouterModels.some((model) => model.id === openRouterModel) && (
                   <option value={openRouterModel}>{openRouterModel} (current)</option>
                 )}
-                <option value="openrouter/auto">OpenRouter Auto Router</option>
                 {visibleOpenRouterModels.map((model) => (
                   <option key={model.id} value={model.id}>
                     {model.free ? '[FREE] ' : ''}{model.name} — {model.id}
@@ -556,6 +559,24 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
               </select>
               <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
                 Exact live API identifiers are used. Free models are listed first and marked FREE.
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Preferred Vision Model (For Images)</label>
+              <select className="input-field" value={openRouterVisionModel} onChange={(e) => setOpenRouterVisionModel(e.target.value)}>
+                <option value="">Use my main model for images</option>
+                {openRouterVisionModel && !visibleOpenRouterModels.some((model) => model.id === openRouterVisionModel) && (
+                  <option value={openRouterVisionModel}>{openRouterVisionModel} (current)</option>
+                )}
+                {visibleOpenRouterModels.map((model) => (
+                  <option key={model.id + '-vision'} value={model.id}>
+                    {model.free ? '[FREE] ' : ''}{model.name} — {model.id}
+                  </option>
+                ))}
+              </select>
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Only used when you attach an image. Leave on “Use my main model” unless your main model can’t read images. Pulled from the live model list — no hardcoded models.
               </div>
             </div>
 
@@ -612,9 +633,9 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
               </div>
             )}
 
-            {openRouterModel === 'openrouter/auto' && (
-              <div style={{ padding: '12px', border: '1px solid var(--border-color)', marginBottom: '14px', fontSize: '11px', color: 'var(--text-secondary)' }}>
-                Auto Router selects a model dynamically, so it has no single fixed token price. Choose a specific model above to see exact posted rates and make costs predictable.
+            {!openRouterModel && (
+              <div style={{ padding: '12px', border: '1px solid var(--danger)', marginBottom: '14px', fontSize: '11px', color: 'var(--danger)' }}>
+                No model selected. Pick a specific model above — the assistant will not run until you do. (This app never uses the Auto Router, which can silently bill premium models.)
               </div>
             )}
 

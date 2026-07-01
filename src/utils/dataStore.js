@@ -26,7 +26,11 @@ const DEFAULT_SETTINGS = {
   depositPercent: 50,
   proposalTerms: 'A 50% deposit is required to schedule work; the balance is due upon completion. This proposal is valid for 30 days from the date above.',
   openRouterKey: '',
-  openRouterModel: 'openrouter/auto',
+  // No default models on purpose: the app must use the models the user picked and
+  // never silently fall back to the auto-router (which can bill premium models).
+  // Empty vision model means "use my main model for images too".
+  openRouterModel: '',
+  openRouterVisionModel: '',
   fishAudioKey: '',
   fishAudioModel: 's2.1-pro-free',
   fishVoiceId: '',

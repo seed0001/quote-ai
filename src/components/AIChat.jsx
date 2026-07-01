@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Sparkles, Mic, MicOff, Send, Volume2, VolumeX, Database, Trash2, BrainCircuit, ChevronDown, Globe } from 'lucide-react';
+import { Sparkles, Mic, MicOff, Send, Volume2, VolumeX, Database, Trash2, BrainCircuit, ChevronDown, Globe, Camera, X } from 'lucide-react';
 import { dispatchNLPActions } from '../utils/dataStore';
 import { runAgent, buildContext } from '../utils/aiEngine';
 import { generateFishSpeech } from '../utils/fishAudio';
@@ -56,6 +56,9 @@ export default function AIChat({
   // Speech Synthesis states
   const [voices, setVoices] = useState([]);
   const [selectedVoiceName, setSelectedVoiceName] = useState('');
+
+  const [attachedImage, setAttachedImage] = useState(null);
+  const fileInputRef = useRef(null);
 
   const chatEndRef = useRef(null);
   const recognitionRef = useRef(null);
@@ -218,22 +221,58 @@ export default function AIChat({
     }
   };
 
+  const handleImageSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        const MAX_SIZE = 1024;
+        if (width > height) {
+          if (width > MAX_SIZE) {
+            height *= MAX_SIZE / width;
+            width = MAX_SIZE;
+          }
+        } else {
+          if (height > MAX_SIZE) {
+            width *= MAX_SIZE / height;
+            height = MAX_SIZE;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        setAttachedImage(canvas.toDataURL('image/jpeg', 0.8));
+      };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+    e.target.value = null; // reset input
+  };
+
   // Chat message submit
   const handleSendMessage = async (e) => {
     e.preventDefault();
     const query = inputText.trim();
-    if (!query || isLoading) return;
+    if ((!query && !attachedImage) || isLoading) return;
 
     // Add user message to screen
     const userMsg = {
       id: `msg-${Date.now()}`,
       sender: 'user',
       text: query,
+      image: attachedImage,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
     setMessages(prev => [...prev, userMsg]);
     setInputText('');
+    setAttachedImage(null);
 
     if (!hasApiKey) {
       setMessages(prev => [...prev, {
@@ -258,8 +297,17 @@ export default function AIChat({
           const personaLabel = m.persona.replace('_', ' ').toUpperCase();
           content = `[Expert: ${personaLabel}]: ${m.text}`;
         }
-        return { role: m.sender === 'ai' ? 'assistant' : 'user', content };
+        // Send previous image attachments to AI if they exist
+        if (m.image) {
+          content = [
+            { type: 'text', text: content || 'See attached image.' },
+            { type: 'image_url', image_url: { url: m.image } }
+          ];
+        }
+        return { role: m.sender === 'user' ? 'user' : 'assistant', content };
       });
+
+    const context = buildContext({ projects, clients, catalog, tasks, activeProjectId, currentView, settings });
 
     setIsLoading(true);
     setLoadingPhase('reasoning');
@@ -275,12 +323,14 @@ export default function AIChat({
       }
 
       const effectiveSettings = { ...settings, personaStatement: personaInstruction };
-      const context = buildContext({ projects, clients, catalog, tasks, activeProjectId, currentView, settings: effectiveSettings });
 
       // Dual pass: Pass 1 reasons & decides ACT vs CLARIFY, Pass 2 executes the
       // approved plan, then a deterministic gate validates the actions before dispatch.
       const result = await runAgent({
-        userMessage: query,
+        userMessage: userMsg.image ? [
+          { type: 'text', text: userMsg.text || 'See attached image.' },
+          { type: 'image_url', image_url: { url: userMsg.image } }
+        ] : userMsg.text,
         history,
         context,
         settings: effectiveSettings,
@@ -476,13 +526,19 @@ export default function AIChat({
                         <Sparkles size={10} style={{ color: 'var(--accent)' }} /> QuoteFlow AI
                       </>
                     ) : (
-                      'Contractor (You)'
+                      'You'
                     )}
                   </span>
-                  <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                  <span style={{ fontSize: '10px', color: '#888' }}>
                     {msg.timestamp}
                   </span>
                 </div>
+
+                {msg.image && (
+                  <div style={{ marginTop: '4px', marginBottom: '8px' }}>
+                    <img src={msg.image} alt="User attachment" style={{ maxWidth: '200px', maxHeight: '200px', borderRadius: '4px', objectFit: 'contain', border: '1px solid var(--border-color)' }} />
+                  </div>
+                )}
 
                 {/* Msg text */}
                 <div style={{ fontSize: '13.5px', lineHeight: '1.5', color: msg.error ? 'var(--danger)' : 'var(--text-primary)' }}>
@@ -546,7 +602,43 @@ export default function AIChat({
 
       {/* Input console */}
       <div className="ai-chat-composer" style={{ padding: '18px 24px', borderTop: '1px solid var(--border-color)', backgroundColor: 'var(--bg-tertiary)' }}>
+        {attachedImage && (
+          <div style={{ marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ position: 'relative', display: 'inline-block' }}>
+              <img src={attachedImage} alt="Attachment preview" style={{ height: '60px', borderRadius: '4px', border: '1px solid var(--border-color)' }} />
+              <button 
+                type="button"
+                onClick={() => setAttachedImage(null)}
+                style={{ position: 'absolute', top: '-6px', right: '-6px', background: 'var(--danger)', color: 'white', border: 'none', borderRadius: '50%', width: '20px', height: '20px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          </div>
+        )}
         <form onSubmit={handleSendMessage} style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          
+          {/* File Input (Hidden) */}
+          <input 
+            type="file" 
+            accept="image/*" 
+            ref={fileInputRef} 
+            onChange={handleImageSelect} 
+            style={{ display: 'none' }} 
+            capture="environment"
+          />
+
+          {/* Camera Button */}
+          <button
+            type="button"
+            className="btn btn-secondary"
+            style={{ padding: '12px' }}
+            onClick={() => fileInputRef.current?.click()}
+            title="Attach a photo or scan"
+            disabled={isLoading || isListening}
+          >
+            <Camera size={16} />
+          </button>
 
           {/* Mic Button */}
           <button

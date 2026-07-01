@@ -25,6 +25,7 @@ const PUBLIC_CONFIG_FIELDS = [
   'proposalTerms',
   'companyLogo',
   'openRouterModel',
+  'openRouterVisionModel',
   'fishAudioModel',
   'fishVoiceId',
   'fishVoiceName',
@@ -644,6 +645,9 @@ export default defineConfig({
   plugins: [react(), hostConfigPlugin],
   server: {
     allowedHosts: true,
+    watch: {
+      ignored: ['**/quote-flow-data/**', '**/.quote-flow-host-config.json']
+    },
     proxy: {
       '/api/fish': {
         target: 'https://api.fish.audio',
