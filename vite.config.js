@@ -27,6 +27,8 @@ const PUBLIC_CONFIG_FIELDS = [
   'companyLogo',
   'openRouterModel',
   'openRouterVisionModel',
+  'openRouterClassifierModel',
+  'classifierSchema',
   'fishAudioModel',
   'fishVoiceId',
   'fishVoiceName',

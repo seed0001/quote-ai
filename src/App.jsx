@@ -121,13 +121,20 @@ export default function App() {
     if (!settings) return;
 
     // Programmatic cleanup: if legacy gemini-1.5-pro is active in settings, scrub it out
-    if (settings.openRouterVisionModel?.includes('gemini-1.5-pro') || settings.openRouterModel?.includes('gemini-1.5-pro')) {
+    if (
+      settings.openRouterVisionModel?.includes('gemini-1.5-pro') || 
+      settings.openRouterModel?.includes('gemini-1.5-pro') ||
+      settings.openRouterClassifierModel?.includes('gemini-1.5-pro')
+    ) {
       const cleanedSettings = { ...settings };
       if (cleanedSettings.openRouterVisionModel?.includes('gemini-1.5-pro')) {
         cleanedSettings.openRouterVisionModel = '';
       }
       if (cleanedSettings.openRouterModel?.includes('gemini-1.5-pro')) {
         cleanedSettings.openRouterModel = '';
+      }
+      if (cleanedSettings.openRouterClassifierModel?.includes('gemini-1.5-pro')) {
+        cleanedSettings.openRouterClassifierModel = '';
       }
       setSettings(cleanedSettings);
       saveSettings(cleanedSettings);

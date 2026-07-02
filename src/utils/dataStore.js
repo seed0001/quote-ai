@@ -33,6 +33,8 @@ const DEFAULT_SETTINGS = {
   // Empty vision model means "use my main model for images too".
   openRouterModel: '',
   openRouterVisionModel: '',
+  openRouterClassifierModel: '',
+  classifierSchema: '{\n  "decision": "ACT" | "CLARIFY" | "SEARCH",\n  "suggestedActions": string[],\n  "searchQueries": string[],\n  "clarifyingQuestion": string\n}',
   fishAudioKey: '',
   fishAudioModel: 's2.1-pro-free',
   fishVoiceId: '',

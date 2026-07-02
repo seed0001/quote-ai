@@ -32,10 +32,14 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
   const [fishLoading, setFishLoading] = useState(false);
   const initialModel = settings.openRouterModel || '';
   const initialVisionModel = settings.openRouterVisionModel || '';
+  const initialClassifierModel = settings.openRouterClassifierModel || '';
+  const initialClassifierSchema = settings.classifierSchema || '{\n  "decision": "ACT" | "CLARIFY" | "SEARCH",\n  "suggestedActions": string[],\n  "searchQueries": string[],\n  "clarifyingQuestion": string\n}';
 
   const [openRouterKey, setOpenRouterKey] = useState(settings.openRouterKey || '');
   const [openRouterModel, setOpenRouterModel] = useState(initialModel);
   const [openRouterVisionModel, setOpenRouterVisionModel] = useState(initialVisionModel);
+  const [openRouterClassifierModel, setOpenRouterClassifierModel] = useState(initialClassifierModel);
+  const [classifierSchema, setClassifierSchema] = useState(initialClassifierSchema);
   const [openRouterModels, setOpenRouterModels] = useState([]);
   const [openRouterModelSearch, setOpenRouterModelSearch] = useState('');
   const [openRouterStatus, setOpenRouterStatus] = useState('');
@@ -174,7 +178,9 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
         ...settings,
         openRouterKey,
         openRouterModel,
-        openRouterVisionModel
+        openRouterVisionModel,
+        openRouterClassifierModel,
+        classifierSchema
       };
       const enhanced = await enhancePersona(customPersonaPrompt, currentSettings);
       setCustomPersonaPrompt(enhanced);
@@ -194,7 +200,9 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
         ...settings,
         openRouterKey,
         openRouterModel,
-        openRouterVisionModel
+        openRouterVisionModel,
+        openRouterClassifierModel,
+        classifierSchema
       };
       const enhanced = await enhancePersona(personaStatement, currentSettings);
       setPersonaStatement(enhanced);
@@ -232,6 +240,8 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
       openRouterKey,
       openRouterModel,
       openRouterVisionModel,
+      openRouterClassifierModel,
+      classifierSchema,
       resendKey,
       notificationFromEmail,
       team,
@@ -847,6 +857,36 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
                   </option>
                 ))}
               </select>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Preferred Classifier Model (Pass 1)</label>
+              <select className="input-field" value={openRouterClassifierModel} onChange={(e) => setOpenRouterClassifierModel(e.target.value)}>
+                <option value="">Use my main model for classification</option>
+                {openRouterClassifierModel && !visibleOpenRouterModels.some((model) => model.id === openRouterClassifierModel) && (
+                  <option value={openRouterClassifierModel}>{openRouterClassifierModel} (current)</option>
+                )}
+                {visibleOpenRouterModels.map((model) => (
+                  <option key={model.id + '-classifier'} value={model.id}>
+                    {model.free ? '🎁 [FREE] ' : '💸 [PAID] '}{model.name} — {model.id}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Classifier JSON Schema (Pass 1)</label>
+              <textarea 
+                className="input-field" 
+                value={classifierSchema} 
+                onChange={(e) => setClassifierSchema(e.target.value)} 
+                rows={6}
+                style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', lineHeight: '1.4' }}
+                placeholder='{\n  "decision": "ACT" | "CLARIFY" | "SEARCH",\n  "suggestedActions": string[],\n  "searchQueries": string[],\n  "clarifyingQuestion": string\n}'
+              />
+              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                Define the JSON fields returned during classification. Pass 2 (reasoning model) will receive these fields as pre-pass guidance.
+              </span>
             </div>
 
             {selectedOpenRouterModel && (
