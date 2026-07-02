@@ -437,7 +437,9 @@ async function callOpenRouter({ systemPrompt, history, userMessage, settings }) 
     }
   }
 
-  throw new Error(`The model did not return valid JSON after ${MAX_PARSE_RETRIES + 1} attempts (last parser error: ${lastError?.message || lastError}). Output was: ${accumulatedContent.substring(0, 500)}`);
+  const parseErr = new Error(`The model did not return valid JSON after ${MAX_PARSE_RETRIES + 1} attempts (last parser error: ${lastError?.message || lastError}).`);
+  parseErr.rawContent = accumulatedContent;
+  throw parseErr;
 }
 
 // Reason why a single action is invalid, or null if it passes. `clientIds` and
@@ -629,12 +631,25 @@ export async function runAgent({ userMessage, history, context, settings, onPhas
 
   onPhase?.('reasoning');
   for (let round = 0; ; round++) {
-    planning = await callOpenRouter({
-      systemPrompt: reasoningPrompt(context, research),
-      history,
-      userMessage,
-      settings
-    });
+    try {
+      planning = await callOpenRouter({
+        systemPrompt: reasoningPrompt(context, research),
+        history,
+        userMessage,
+        settings
+      });
+    } catch (err) {
+      if (err.rawContent) {
+        return {
+          decision: 'CLARIFY',
+          reasoning: 'Model returned plain text response instead of structured JSON.',
+          actions: [],
+          rejected: [],
+          response: err.rawContent.trim()
+        };
+      }
+      throw err;
+    }
 
     const wantsSearch = String(planning.decision || '').toUpperCase() === 'SEARCH';
     const queries = Array.isArray(planning.searchQueries) ? planning.searchQueries : [];
@@ -664,12 +679,26 @@ export async function runAgent({ userMessage, history, context, settings, onPhas
   // PASS 2 — execute the approved plan.
   onPhase?.('executing');
   const plan = Array.isArray(planning.plan) ? planning.plan : [];
-  const execResult = await callOpenRouter({
-    systemPrompt: executionPrompt(context, plan, reasoning, research),
-    history,
-    userMessage,
-    settings
-  });
+  let execResult;
+  try {
+    execResult = await callOpenRouter({
+      systemPrompt: executionPrompt(context, plan, reasoning, research),
+      history,
+      userMessage,
+      settings
+    });
+  } catch (err) {
+    if (err.rawContent) {
+      return {
+        decision: 'CLARIFY',
+        reasoning: 'Plan execution failed to parse as JSON. Returning raw text response.',
+        actions: [],
+        rejected: [],
+        response: err.rawContent.trim()
+      };
+    }
+    throw err;
+  }
 
   const proposedActions = Array.isArray(execResult.actions) ? execResult.actions : [];
   let response = execResult.response || 'Executed successfully.';
