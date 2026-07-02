@@ -16,7 +16,7 @@ export async function fetchOpenRouterModels(apiKey) {
   const models = Array.isArray(payload.data) ? payload.data : [];
 
   return models
-    .filter((model) => model?.id)
+    .filter((model) => model?.id && !model.id.includes('gemini-1.5-pro'))
     .map((model) => {
       const pricing = {
         prompt: Number(model.pricing?.prompt || 0),
@@ -28,6 +28,21 @@ export async function fetchOpenRouterModels(apiKey) {
         cacheRead: Number(model.pricing?.input_cache_read || 0),
         cacheWrite: Number(model.pricing?.input_cache_write || 0),
       };
+      const architecture = model.architecture || {};
+      const inputModalities = model.input_modalities || architecture.input_modalities || [];
+      const isVision = 
+        (architecture.modality && architecture.modality.includes('image')) ||
+        (Array.isArray(inputModalities) && inputModalities.includes('image')) ||
+        (model.id && (
+          model.id.includes('vision') || 
+          model.id.includes('vl') || 
+          model.id.includes('gpt-4o') || 
+          model.id.includes('claude-3') || 
+          model.id.includes('gemini-2.0') || 
+          model.id.includes('pixtral') || 
+          model.id.includes('llama-3.2-11b') || 
+          model.id.includes('llama-3.2-90b')
+        ));
       return {
         id: model.id,
         name: model.name || model.id,
@@ -36,6 +51,7 @@ export async function fetchOpenRouterModels(apiKey) {
         pricing,
         description: model.description || '',
         supportedParameters: model.supported_parameters || [],
+        isVision: !!isVision,
       };
     })
     .sort((a, b) => {

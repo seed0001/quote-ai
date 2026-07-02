@@ -368,10 +368,13 @@ export default function AIChat({
 
     } catch (err) {
       console.error(err);
+      const errorMsg = err.message || 'Check connection or key settings.';
+      const isParsing = errorMsg.includes('JSON') || errorMsg.includes('parse');
+      const prefix = isParsing ? 'AI Formatting Error' : 'API Connection Error';
       setMessages(prev => [...prev, {
         id: `msg-err-${Date.now()}`,
         sender: 'ai',
-        text: `Error parsing command: ${err.message || 'Check connection or key settings.'}`,
+        text: `${prefix}: ${errorMsg}`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         error: true
       }]);

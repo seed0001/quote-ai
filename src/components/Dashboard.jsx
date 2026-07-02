@@ -8,9 +8,10 @@ import {
   ArrowRight,
   ArrowLeft,
   X,
-  FileText
+  FileText,
+  Trash2
 } from 'lucide-react';
-import { calculateQuoteTotals, addProject } from '../utils/dataStore';
+import { calculateQuoteTotals, addProject, deleteProject, getProjects } from '../utils/dataStore';
 
 export default function Dashboard({ 
   projects, 
@@ -152,6 +153,14 @@ export default function Dashboard({
     }
   };
 
+  const handleDeleteProject = (e, id) => {
+    e.stopPropagation();
+    if (window.confirm('Are you sure you want to delete this project? This action cannot be undone.')) {
+      deleteProject(id);
+      onProjectsChange(getProjects());
+    }
+  };
+
   return (
     <div>
       {/* Metrics Row */}
@@ -241,6 +250,16 @@ export default function Dashboard({
                           
                           {/* Quick controls to shift status */}
                           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', borderTop: '1px solid var(--border-color)', marginTop: '10px', paddingTop: '8px' }}>
+                            <button 
+                              className="btn btn-sm" 
+                              style={{ padding: '2px 6px', fontSize: '10px', backgroundColor: 'var(--bg-primary)', color: 'var(--text-muted)' }}
+                              onClick={(e) => handleDeleteProject(e, p.id)}
+                              title="Delete project"
+                            >
+                              <Trash2 size={10} />
+                            </button>
+                            <div style={{ flex: 1 }}></div>
+
                             {stage.id !== 'lead' && (
                               <button 
                                 className="btn btn-sm btn-secondary" 

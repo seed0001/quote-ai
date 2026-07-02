@@ -3,6 +3,9 @@ import { Save, Download, Upload, Trash2, ShieldAlert } from 'lucide-react';
 import { exportDataBackup, importDataBackup, masterResetData } from '../utils/dataStore';
 import { fetchAllFishVoices, generateFishSpeech } from '../utils/fishAudio';
 import { fetchOpenRouterModels } from '../utils/openRouterModels';
+import { fetchOllamaModels } from '../utils/ollamaModels';
+import { enhancePersona } from '../utils/aiEngine';
+import { playSuccess, playWarning, playClick } from '../utils/soundEngine';
 
 export default function SettingsView({ settings, onSettingsChange, onDataImported }) {
   const [companyName, setCompanyName] = useState(settings.companyName || '');
@@ -49,9 +52,19 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
   const [testEmail, setTestEmail] = useState('');
   const [testStatus, setTestStatus] = useState('');
   const [customPersonaPrompt, setCustomPersonaPrompt] = useState(settings.customPersonaPrompt || '');
+  const [enhancingPersona, setEnhancingPersona] = useState(false);
+  const [enhancingPersonaStatement, setEnhancingPersonaStatement] = useState(false);
 
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [importStatus, setImportStatus] = useState({ type: '', message: '' });
+
+  const [theme, setTheme] = useState(settings.theme || 'dark');
+  const [spacingScale, setSpacingScale] = useState(settings.spacingScale !== undefined ? settings.spacingScale : 1.0);
+  const [fontScale, setFontScale] = useState(settings.fontScale !== undefined ? settings.fontScale : 1.0);
+  const [radius, setRadius] = useState(settings.radius !== undefined ? settings.radius : 0);
+  const [soundVolume, setSoundVolume] = useState(settings.soundVolume !== undefined ? settings.soundVolume : 0.5);
+  const [soundEnabled, setSoundEnabled] = useState(settings.soundEnabled !== undefined ? settings.soundEnabled : true);
+  const [soundPack, setSoundPack] = useState(settings.soundPack || 'modern');
 
   const addTeamMember = () => {
     const name = newMemberName.trim();
@@ -82,11 +95,18 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
 
   const loadOpenRouterModels = async (key = openRouterKey) => {
     setOpenRouterLoading(true);
-    setOpenRouterStatus('Checking your OpenRouter model access...');
+    setOpenRouterStatus('Checking your model access...');
     try {
-      const models = await fetchOpenRouterModels(key);
+      const openRouterPromise = (key || settings.openRouterConfigured) ? fetchOpenRouterModels(key) : Promise.resolve([]);
+      const ollamaPromise = fetchOllamaModels();
+      
+      const [orModels, olModels] = await Promise.all([
+        openRouterPromise.catch((e) => { console.warn(e); return []; }),
+        ollamaPromise
+      ]);
+      const models = [...orModels, ...olModels];
       setOpenRouterModels(models);
-      setOpenRouterStatus(`Loaded ${models.length} available models from OpenRouter.`);
+      setOpenRouterStatus(`Loaded ${orModels.length} cloud models and ${olModels.length} local models.`);
     } catch (error) {
       setOpenRouterModels([]);
       setOpenRouterStatus(error.message);
@@ -97,7 +117,6 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
 
   useEffect(() => {
     const key = openRouterKey.trim();
-    if (!key && !settings.openRouterConfigured) return undefined;
     const timer = window.setTimeout(() => loadOpenRouterModels(key), 700);
     return () => window.clearTimeout(timer);
   }, [openRouterKey, settings.openRouterConfigured]);
@@ -146,6 +165,47 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
     reader.readAsDataURL(file);
   };
 
+  const handleEnhancePersona = async () => {
+    if (!customPersonaPrompt.trim()) return;
+    setEnhancingPersona(true);
+    try {
+      // Need to use the latest settings object in case the user hasn't saved their API key changes yet
+      const currentSettings = {
+        ...settings,
+        openRouterKey,
+        openRouterModel,
+        openRouterVisionModel
+      };
+      const enhanced = await enhancePersona(customPersonaPrompt, currentSettings);
+      setCustomPersonaPrompt(enhanced);
+    } catch (err) {
+      console.error('Failed to enhance persona:', err);
+      alert(err.message || 'Failed to enhance persona.');
+    } finally {
+      setEnhancingPersona(false);
+    }
+  };
+
+  const handleEnhancePersonaStatement = async () => {
+    if (!personaStatement.trim()) return;
+    setEnhancingPersonaStatement(true);
+    try {
+      const currentSettings = {
+        ...settings,
+        openRouterKey,
+        openRouterModel,
+        openRouterVisionModel
+      };
+      const enhanced = await enhancePersona(personaStatement, currentSettings);
+      setPersonaStatement(enhanced);
+    } catch (err) {
+      console.error('Failed to enhance persona statement:', err);
+      alert(err.message || 'Failed to enhance persona statement.');
+    } finally {
+      setEnhancingPersonaStatement(false);
+    }
+  };
+
   const handleSave = async (e) => {
     e.preventDefault();
     setSaveSuccess(false);
@@ -179,6 +239,13 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
       tavilyKey,
       braveSearchKey,
       stripeKey,
+      theme,
+      spacingScale: parseFloat(spacingScale) || 1.0,
+      fontScale: parseFloat(fontScale) || 1.0,
+      radius: parseInt(radius) || 0,
+      soundVolume: parseFloat(soundVolume) || 0.5,
+      soundEnabled,
+      soundPack,
     };
 
     try {
@@ -200,8 +267,10 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
         stripeKey: '',
       });
       setSaveSuccess(true);
+      playSuccess();
       setTimeout(() => setSaveSuccess(false), 3000);
     } catch (error) {
+      playWarning();
       setImportStatus({ type: 'error', message: error.message });
       setTimeout(() => setImportStatus({ type: '', message: '' }), 5000);
     }
@@ -295,16 +364,38 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+    <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
       
-      <div className="grid-2">
-        {/* LEFT COLUMN: COMPANY & COST SETTINGS */}
-        <div className="panel" style={{ marginBottom: 0 }}>
-          <div className="panel-header">
-            <h2 className="panel-title">Business & Pricing Configuration</h2>
-          </div>
+      {/* Top action bar: Save button */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h1 style={{ fontSize: '20px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Settings</h1>
+        <button type="submit" className="btn btn-primary" style={{ gap: '8px' }}>
+          <Save size={16} /> Save All Settings
+        </button>
+      </div>
+
+      {saveSuccess && (
+        <div style={{ padding: '12px', background: 'var(--success-muted)', border: '1px solid var(--success)', color: 'var(--success)', fontSize: '13px' }}>
+          ✓ Settings saved successfully to host configuration.
+        </div>
+      )}
+
+      {importStatus.message && (
+        <div style={{ padding: '12px', background: importStatus.type === 'error' ? 'var(--danger-muted)' : 'var(--success-muted)', border: `1px solid var(--${importStatus.type === 'error' ? 'danger' : 'success'})`, color: `var(--${importStatus.type === 'error' ? 'danger' : 'success'})`, fontSize: '13px' }}>
+          {importStatus.message}
+        </div>
+      )}
+
+      <div className="grid-2" style={{ alignItems: 'start' }}>
+        {/* LEFT COLUMN: COMPANY PROFILE & COST RULES */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
           
-          <form onSubmit={handleSave}>
+          {/* Card 1: Company Profile */}
+          <div className="panel" style={{ marginBottom: 0 }}>
+            <div className="panel-header">
+              <h2 className="panel-title">Company Profile</h2>
+            </div>
+            
             <h3 style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '14px', letterSpacing: '0.5px' }}>
               Company Details (Appears on client proposals)
             </h3>
@@ -354,8 +445,19 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
                 placeholder="Describe how the agent should behave, communicate, make decisions, and represent your business."
                 rows={6}
               />
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                This statement is included in every AI request as behavioral guidance.
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                  This statement is included in every AI request as behavioral guidance.
+                </div>
+                <button 
+                  type="button" 
+                  className="btn btn-secondary" 
+                  style={{ padding: '2px 8px', fontSize: '11px', height: 'auto' }}
+                  onClick={handleEnhancePersonaStatement}
+                  disabled={enhancingPersonaStatement || !personaStatement.trim()}
+                >
+                  {enhancingPersonaStatement ? 'Enhancing...' : '✨ Enhance with AI'}
+                </button>
               </div>
             </div>
 
@@ -422,8 +524,14 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
               </div>
             </div>
 
-            <div style={{ borderTop: '1px dashed var(--border-color)', margin: '24px 0' }}></div>
+          </div>
 
+          {/* Card 2: Cost & Pricing Rules */}
+          <div className="panel" style={{ marginBottom: 0 }}>
+            <div className="panel-header">
+              <h2 className="panel-title">Pricing Defaults</h2>
+            </div>
+            
             <h3 style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '14px', letterSpacing: '0.5px' }}>
               Standard Cost Estimates Defaults
             </h3>
@@ -505,9 +613,176 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
                 rows={3}
               />
             </div>
+          </div>
 
-            <div style={{ borderTop: '1px dashed var(--border-color)', margin: '24px 0' }}></div>
+          {/* Card 3: Team Members */}
+          <div className="panel" style={{ marginBottom: 0 }}>
+            <div className="panel-header">
+              <h2 className="panel-title">Team Settings</h2>
+            </div>
+            
+            <div className="form-group">
+              <label className="form-label">Team Members</label>
+              {team.length > 0 && (
+                <div style={{ marginBottom: '8px' }}>
+                  {team.map((m, idx) => (
+                    <div key={`${m.email}-${idx}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12px', padding: '6px 8px', border: '1px solid var(--border-color)', borderRadius: '5px', marginBottom: '4px' }}>
+                      <span>{m.name} {m.email && <span style={{ color: 'var(--text-muted)' }}>· {m.email}</span>}</span>
+                      <button type="button" onClick={() => removeTeamMember(idx)} style={{ cursor: 'pointer', color: 'var(--danger)', background: 'none', border: 'none' }}>
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <input type="text" className="input-field" placeholder="Name" value={newMemberName} onChange={(e) => setNewMemberName(e.target.value)} />
+                <input type="email" className="input-field" placeholder="Email" value={newMemberEmail} onChange={(e) => setNewMemberEmail(e.target.value)} />
+                <button type="button" className="btn btn-secondary btn-sm" onClick={addTeamMember}>Add</button>
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Members appear as assignee options on the calendar.
+              </div>
+            </div>
+          </div>
 
+        </div>
+
+        {/* RIGHT COLUMN: THEMES, SOUNDS, AI, INTEGRATIONS, BACKUPS */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          
+          {/* Card 4: Appearance & Theming */}
+          <div className="panel" style={{ marginBottom: 0 }}>
+            <div className="panel-header">
+              <h2 className="panel-title">Appearance & Custom Themes</h2>
+            </div>
+            
+            <div className="form-group">
+              <label className="form-label">Color Theme</label>
+              <select className="input-field" value={theme} onChange={(e) => setTheme(e.target.value)}>
+                <option value="dark">Dark Theme (Default)</option>
+                <option value="light">Light Theme</option>
+                <option value="ocean">Ocean Blue Theme</option>
+                <option value="forest">Forest Green Theme</option>
+                <option value="midnight">Midnight Purple Theme</option>
+              </select>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Spacing Density ({spacingScale}x)</label>
+              <input 
+                type="range" 
+                min="0.75" 
+                max="1.25" 
+                step="0.05" 
+                className="input-field" 
+                style={{ padding: 0, height: '24px' }}
+                value={spacingScale} 
+                onChange={(e) => setSpacingScale(e.target.value)} 
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-muted)' }}>
+                <span>Compact (0.75x)</span>
+                <span>Comfortable (1.0x)</span>
+                <span>Spacious (1.25x)</span>
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Font Scale ({fontScale}x)</label>
+              <input 
+                type="range" 
+                min="0.85" 
+                max="1.15" 
+                step="0.05" 
+                className="input-field" 
+                style={{ padding: 0, height: '24px' }}
+                value={fontScale} 
+                onChange={(e) => setFontScale(e.target.value)} 
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-muted)' }}>
+                <span>Small (0.85x)</span>
+                <span>Default (1.0x)</span>
+                <span>Large (1.15x)</span>
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Border Radius ({radius}px)</label>
+              <input 
+                type="range" 
+                min="0" 
+                max="12" 
+                step="1" 
+                className="input-field" 
+                style={{ padding: 0, height: '24px' }}
+                value={radius} 
+                onChange={(e) => setRadius(e.target.value)} 
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: 'var(--text-muted)' }}>
+                <span>Sharp (0px)</span>
+                <span>Soft (4px)</span>
+                <span>Rounded (12px)</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Card 5: Sound Engine Preferences */}
+          <div className="panel" style={{ marginBottom: 0 }}>
+            <div className="panel-header">
+              <h2 className="panel-title">UI Sound Effects</h2>
+            </div>
+            
+            <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <input 
+                type="checkbox" 
+                id="soundEnabled"
+                checked={soundEnabled} 
+                onChange={(e) => setSoundEnabled(e.target.checked)} 
+                style={{ width: '16px', height: '16px' }}
+              />
+              <label htmlFor="soundEnabled" className="form-label" style={{ marginBottom: 0, cursor: 'pointer' }}>Enable UI Sounds</label>
+            </div>
+
+            {soundEnabled && (
+              <>
+                <div className="form-group">
+                  <label className="form-label">Sound Pack Style</label>
+                  <select className="input-field" value={soundPack} onChange={(e) => {
+                    setSoundPack(e.target.value);
+                    // play click preview
+                    setTimeout(() => playClick(), 100);
+                  }}>
+                    <option value="modern">Modern Crisp</option>
+                    <option value="mechanical">Retro Mechanical</option>
+                    <option value="soft">Soft Bubble</option>
+                  </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Volume ({Math.round(soundVolume * 100)}%)</label>
+                  <input 
+                    type="range" 
+                    min="0" 
+                    max="1" 
+                    step="0.05" 
+                    className="input-field" 
+                    style={{ padding: 0, height: '24px' }}
+                    value={soundVolume} 
+                    onChange={(e) => setSoundVolume(e.target.value)} 
+                  />
+                </div>
+                <button type="button" className="btn btn-secondary btn-sm" onClick={() => playSuccess()}>
+                  Test Chime
+                </button>
+              </>
+            )}
+          </div>
+
+          {/* Card 6: AI Engine & Brain */}
+          <div className="panel" style={{ marginBottom: 0 }}>
+            <div className="panel-header">
+              <h2 className="panel-title">AI Engine Settings</h2>
+            </div>
+            
             <h3 style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)', marginBottom: '14px', letterSpacing: '0.5px' }}>
               OpenRouter NLP Configuration
             </h3>
@@ -523,7 +798,7 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
                   onChange={(e) => setOpenRouterKey(e.target.value)}
                   style={{ fontFamily: 'var(--font-mono)', flex: 1 }}
                 />
-                <button type="button" className="btn btn-secondary" onClick={() => loadOpenRouterModels()} disabled={openRouterLoading || !(openRouterKey || settings.openRouterConfigured)}>
+                <button type="button" className="btn btn-secondary" onClick={() => loadOpenRouterModels()} disabled={openRouterLoading}>
                   {openRouterLoading ? 'Searching...' : 'Refresh Models'}
                 </button>
               </div>
@@ -553,31 +828,25 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
                 )}
                 {visibleOpenRouterModels.map((model) => (
                   <option key={model.id} value={model.id}>
-                    {model.free ? '[FREE] ' : ''}{model.name} — {model.id}
+                    {model.free ? '🎁 [FREE] ' : '💸 [PAID] '}{model.name} — {model.id}
                   </option>
                 ))}
               </select>
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Exact live API identifiers are used. Free models are listed first and marked FREE.
-              </div>
             </div>
 
             <div className="form-group">
               <label className="form-label">Preferred Vision Model (For Images)</label>
               <select className="input-field" value={openRouterVisionModel} onChange={(e) => setOpenRouterVisionModel(e.target.value)}>
                 <option value="">Use my main model for images</option>
-                {openRouterVisionModel && !visibleOpenRouterModels.some((model) => model.id === openRouterVisionModel) && (
+                {openRouterVisionModel && !visibleOpenRouterModels.filter(m => m.isVision).some((model) => model.id === openRouterVisionModel) && (
                   <option value={openRouterVisionModel}>{openRouterVisionModel} (current)</option>
                 )}
-                {visibleOpenRouterModels.map((model) => (
+                {visibleOpenRouterModels.filter(m => m.isVision).map((model) => (
                   <option key={model.id + '-vision'} value={model.id}>
-                    {model.free ? '[FREE] ' : ''}{model.name} — {model.id}
+                    {model.free ? '🎁 [FREE] ' : '💸 [PAID] '}{model.name} — {model.id}
                   </option>
                 ))}
               </select>
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Only used when you attach an image. Leave on “Use my main model” unless your main model can’t read images. Pulled from the live model list — no hardcoded models.
-              </div>
             </div>
 
             {selectedOpenRouterModel && (
@@ -594,54 +863,14 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
 
                 <div className="grid-2" style={{ gap: '8px' }}>
                   <div style={{ padding: '10px', background: 'var(--bg-secondary)' }}>
-                    <div style={{ color: 'var(--text-muted)', fontSize: '10px', textTransform: 'uppercase' }}>Input / Prompt</div>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontWeight: '700' }}>{perMillion(selectedOpenRouterModel.pricing.prompt)} / 1M tokens</div>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '10px', textTransform: 'uppercase' }}>Input</div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontWeight: '700' }}>{perMillion(selectedOpenRouterModel.pricing.prompt)} / 1M</div>
                   </div>
                   <div style={{ padding: '10px', background: 'var(--bg-secondary)' }}>
-                    <div style={{ color: 'var(--text-muted)', fontSize: '10px', textTransform: 'uppercase' }}>Output / Completion</div>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontWeight: '700' }}>{perMillion(selectedOpenRouterModel.pricing.completion)} / 1M tokens</div>
-                  </div>
-                  <div style={{ padding: '10px', background: 'var(--bg-secondary)' }}>
-                    <div style={{ color: 'var(--text-muted)', fontSize: '10px', textTransform: 'uppercase' }}>Fixed Request Fee</div>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontWeight: '700' }}>{formatFixedCost(selectedOpenRouterModel.pricing.request)} / request</div>
-                  </div>
-                  <div style={{ padding: '10px', background: 'var(--bg-secondary)' }}>
-                    <div style={{ color: 'var(--text-muted)', fontSize: '10px', textTransform: 'uppercase' }}>Context Window</div>
-                    <div style={{ fontFamily: 'var(--font-mono)', fontWeight: '700' }}>{selectedOpenRouterModel.contextLength.toLocaleString()} tokens</div>
+                    <div style={{ color: 'var(--text-muted)', fontSize: '10px', textTransform: 'uppercase' }}>Output</div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontWeight: '700' }}>{perMillion(selectedOpenRouterModel.pricing.completion)} / 1M</div>
                   </div>
                 </div>
-
-                {(selectedOpenRouterModel.pricing.internalReasoning > 0
-                  || selectedOpenRouterModel.pricing.cacheRead > 0
-                  || selectedOpenRouterModel.pricing.cacheWrite > 0
-                  || selectedOpenRouterModel.pricing.webSearch > 0) && (
-                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '10px', lineHeight: 1.7 }}>
-                    {selectedOpenRouterModel.pricing.internalReasoning > 0 && <div>Reasoning tokens: {perMillion(selectedOpenRouterModel.pricing.internalReasoning)} per 1M</div>}
-                    {selectedOpenRouterModel.pricing.cacheRead > 0 && <div>Cached-input reads: {perMillion(selectedOpenRouterModel.pricing.cacheRead)} per 1M</div>}
-                    {selectedOpenRouterModel.pricing.cacheWrite > 0 && <div>Cached-input writes: {perMillion(selectedOpenRouterModel.pricing.cacheWrite)} per 1M</div>}
-                    {selectedOpenRouterModel.pricing.webSearch > 0 && <div>Web search: {formatFixedCost(selectedOpenRouterModel.pricing.webSearch)} per operation</div>}
-                  </div>
-                )}
-
-                <div style={{ borderTop: '1px dashed var(--border-color)', marginTop: '12px', paddingTop: '10px', fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                  Example: 10,000 input tokens plus 2,000 output tokens would cost approximately{' '}
-                  <strong style={{ color: 'var(--accent)', fontFamily: 'var(--font-mono)' }}>
-                    {selectedOpenRouterModel.free ? '$0.00' : formatFixedCost(exampleCost)}
-                  </strong>.
-                  Input tokens include your instructions, business context, persona, conversation history, and project data. Output tokens are the model’s generated reasoning and response. Actual billing uses the provider’s measured token counts.
-                </div>
-              </div>
-            )}
-
-            {!openRouterModel && (
-              <div style={{ padding: '12px', border: '1px solid var(--danger)', marginBottom: '14px', fontSize: '11px', color: 'var(--danger)' }}>
-                No model selected. Pick a specific model above — the assistant will not run until you do. (This app never uses the Auto Router, which can silently bill premium models.)
-              </div>
-            )}
-
-            {openRouterStatus && (
-              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
-                {openRouterStatus}
               </div>
             )}
 
@@ -649,13 +878,24 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
               <label className="form-label">Custom AI Persona Prompt</label>
               <textarea 
                 className="input-field" 
-                placeholder="E.g., You are a strict business management consultant..."
+                placeholder="E.g., You are a strict AI assistant..."
                 value={customPersonaPrompt}
                 onChange={(e) => setCustomPersonaPrompt(e.target.value)}
                 style={{ height: '80px' }}
               />
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Define custom instructions here. You can select "Custom Persona" in the AI Chat window to use this.
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                  Define custom instructions here.
+                </div>
+                <button 
+                  type="button" 
+                  className="btn btn-secondary" 
+                  style={{ padding: '2px 8px', fontSize: '11px', height: 'auto' }}
+                  onClick={handleEnhancePersona}
+                  disabled={enhancingPersona || !customPersonaPrompt.trim()}
+                >
+                  {enhancingPersona ? 'Enhancing...' : '✨ Enhance with AI'}
+                </button>
               </div>
             </div>
 
@@ -670,14 +910,11 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
               <input
                 type="password"
                 className="input-field"
-                placeholder={settings.fishAudioConfigured ? 'Configured on hosting computer' : 'Paste your Fish Audio API key'}
+                placeholder={settings.fishAudioConfigured ? 'Configured on hosting computer' : 'Paste Fish API Key'}
                 value={fishAudioKey}
                 onChange={(e) => setFishAudioKey(e.target.value)}
                 style={{ fontFamily: 'var(--font-mono)' }}
               />
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Stored only in this browser and sent directly to Fish Audio.
-              </div>
             </div>
 
             <div className="grid-2">
@@ -689,7 +926,7 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
               </div>
               <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end' }}>
                 <button type="button" className="btn btn-secondary" onClick={loadFishVoices} disabled={fishLoading || !(fishAudioKey || settings.fishAudioConfigured)} style={{ width: '100%' }}>
-                  {fishLoading ? 'Loading...' : 'Load All Voices'}
+                  {fishLoading ? 'Loading...' : 'Load Voices'}
                 </button>
               </div>
             </div>
@@ -697,18 +934,7 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
             {(fishVoices.length > 0 || fishVoiceId) && (
               <>
                 <div className="form-group">
-                  <label className="form-label">Search Available Voices</label>
-                  <input
-                    type="text"
-                    className="input-field"
-                    value={fishVoiceSearch}
-                    onChange={(e) => setFishVoiceSearch(e.target.value)}
-                    placeholder="Search by voice, author, language, or tag"
-                  />
-                </div>
-
-                <div className="form-group">
-                  <label className="form-label">Selected Fish Audio Voice</label>
+                  <label className="form-label">Selected Voice</label>
                   <select
                     className="input-field"
                     value={fishVoiceId}
@@ -724,40 +950,30 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
                     )}
                     {visibleFishVoices.map((voice) => (
                       <option key={voice.id} value={voice.id}>
-                        {voice.title}{voice.author ? ` — ${voice.author}` : ''}{voice.languages.length ? ` (${voice.languages.join(', ')})` : ''}
+                        {voice.title}
                       </option>
                     ))}
                   </select>
                 </div>
-
-                <button type="button" className="btn btn-secondary btn-sm" onClick={testFishVoice} disabled={fishLoading || !fishVoiceId}>
-                  Test Selected Voice
-                </button>
               </>
             )}
+          </div>
 
-            {fishStatus && (
-              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '10px' }}>
-                {fishStatus}
-              </div>
-            )}
-
-            <h3 style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)', margin: '28px 0 14px', letterSpacing: '0.5px' }}>
-              Reminders & Team (Email via Resend)
-            </h3>
-
+          {/* Card 7: Cloud Integrations */}
+          <div className="panel" style={{ marginBottom: 0 }}>
+            <div className="panel-header">
+              <h2 className="panel-title">System Integrations</h2>
+            </div>
+            
             <div className="form-group">
               <label className="form-label">Resend API Key</label>
               <input
                 type="password"
                 className="input-field"
-                placeholder={settings.resendConfigured ? 'Configured on hosting computer' : 'Paste your Resend API key (re_...)'}
+                placeholder={settings.resendConfigured ? 'Configured on hosting computer' : 'Paste Resend API key'}
                 value={resendKey}
                 onChange={(e) => setResendKey(e.target.value)}
               />
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Powers autonomous task reminders and customer status updates. Stored only on the hosting computer.
-              </div>
             </div>
 
             <div className="form-group">
@@ -769,45 +985,28 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
                 value={notificationFromEmail}
                 onChange={(e) => setNotificationFromEmail(e.target.value)}
               />
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Must be a verified Resend sender. Leave blank to use Resend's test address.
-              </div>
             </div>
-
-            <h3 style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)', margin: '28px 0 14px', letterSpacing: '0.5px' }}>
-              Payment Integration
-            </h3>
 
             <div className="form-group">
               <label className="form-label">Stripe API Key</label>
               <input
                 type="password"
                 className="input-field"
-                placeholder={settings.stripeConfigured ? 'Configured on hosting computer' : 'Paste your Stripe Secret API key (sk_...)'}
+                placeholder={settings.stripeConfigured ? 'Configured on hosting computer' : 'Paste Stripe Key'}
                 value={stripeKey}
                 onChange={(e) => setStripeKey(e.target.value)}
               />
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Powers secure email checkout links.
-              </div>
             </div>
-
-            <h3 style={{ fontSize: '11px', textTransform: 'uppercase', color: 'var(--text-muted)', margin: '28px 0 14px', letterSpacing: '0.5px' }}>
-              Search Providers Configuration
-            </h3>
 
             <div className="form-group">
               <label className="form-label">Tavily API Key (AI Search)</label>
               <input
                 type="password"
                 className="input-field"
-                placeholder={settings.tavilyConfigured ? 'Configured on hosting computer' : 'Paste your Tavily API key (tvly-...)'}
+                placeholder={settings.tavilyConfigured ? 'Configured on hosting computer' : 'Paste Tavily Key'}
                 value={tavilyKey}
                 onChange={(e) => setTavilyKey(e.target.value)}
               />
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Powers deep AI-first research summaries.
-              </div>
             </div>
 
             <div className="form-group">
@@ -815,136 +1014,49 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
               <input
                 type="password"
                 className="input-field"
-                placeholder={settings.braveSearchConfigured ? 'Configured on hosting computer' : 'Paste your Brave Search API key'}
+                placeholder={settings.braveSearchConfigured ? 'Configured on hosting computer' : 'Paste Brave Key'}
                 value={braveSearchKey}
                 onChange={(e) => setBraveSearchKey(e.target.value)}
               />
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Independent index alternative to Google/Bing.
-              </div>
             </div>
-
-            <div className="form-group">
-              <label className="form-label">Team Members</label>
-              {team.length > 0 && (
-                <div style={{ marginBottom: '8px' }}>
-                  {team.map((m, idx) => (
-                    <div key={`${m.email}-${idx}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '12px', padding: '6px 8px', border: '1px solid var(--border-color)', borderRadius: '5px', marginBottom: '4px' }}>
-                      <span>{m.name} {m.email && <span style={{ color: 'var(--text-muted)' }}>· {m.email}</span>}</span>
-                      <button type="button" onClick={() => removeTeamMember(idx)} style={{ cursor: 'pointer', color: 'var(--danger)', background: 'none', border: 'none' }}>
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <input type="text" className="input-field" placeholder="Name" value={newMemberName} onChange={(e) => setNewMemberName(e.target.value)} />
-                <input type="email" className="input-field" placeholder="Email" value={newMemberEmail} onChange={(e) => setNewMemberEmail(e.target.value)} />
-                <button type="button" className="btn btn-secondary btn-sm" onClick={addTeamMember}>Add</button>
-              </div>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Save to apply. Members appear as assignee options on the calendar.
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Send a Test Email</label>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                <input type="email" className="input-field" placeholder="you@example.com" value={testEmail} onChange={(e) => setTestEmail(e.target.value)} />
-                <button type="button" className="btn btn-secondary btn-sm" onClick={sendTestEmail} disabled={!testEmail.trim()}>Send Test</button>
-              </div>
-              {testStatus && (
-                <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '6px' }}>{testStatus}</div>
-              )}
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Save your Resend key first. Test sending only works from the hosting computer.
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '16px', marginTop: '24px' }}>
-              <button type="submit" className="btn btn-primary">
-                <Save size={14} /> Save Configuration
-              </button>
-              {saveSuccess && (
-                <span style={{ color: 'var(--success)', fontSize: '12px', fontWeight: 'bold' }}>
-                  ✓ System settings saved successfully.
-                </span>
-              )}
-            </div>
-          </form>
-        </div>
-
-        {/* RIGHT COLUMN: SYSTEM UTILITIES & BACKUPS */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-          
-          {/* Backups Panel */}
-          <div className="panel">
-            <div className="panel-header">
-              <h2 className="panel-title">Data backup & migration</h2>
-            </div>
-            
-            <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '20px' }}>
-              Since all details are stored directly in your web browser local storage, you should periodically back up your data to avoid losing quotes during cache cleans.
-            </p>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <button className="btn btn-secondary" onClick={exportDataBackup} style={{ justifyContent: 'flex-start' }}>
-                <Download size={16} style={{ color: 'var(--accent)' }} /> Export local database (.JSON)
-              </button>
-
-              <label className="btn btn-secondary" style={{ justifyContent: 'flex-start', cursor: 'pointer', marginBottom: 0 }}>
-                <Upload size={16} style={{ color: 'var(--info)' }} /> Import database backup
-                <input 
-                  type="file" 
-                  accept=".json" 
-                  onChange={handleImportFile} 
-                  style={{ display: 'none' }} 
-                />
-              </label>
-            </div>
-
-            {importStatus.message && (
-              <div 
-                style={{ 
-                  marginTop: '16px', 
-                  padding: '10px 14px', 
-                  borderLeft: '3px solid',
-                  borderColor: importStatus.type === 'success' ? 'var(--success)' : 'var(--danger)',
-                  backgroundColor: importStatus.type === 'success' ? 'var(--success-muted)' : 'var(--danger-muted)',
-                  fontSize: '12px',
-                  color: importStatus.type === 'success' ? 'var(--success)' : 'var(--danger)',
-                }}
-              >
-                {importStatus.message}
-              </div>
-            )}
           </div>
 
-          {/* Danger zone / Factory Reset */}
-          <div className="panel" style={{ border: '1px solid var(--danger)' }}>
+          {/* Card 8: Data Backup & Migration */}
+          <div className="panel" style={{ marginBottom: 0 }}>
+            <div className="panel-header">
+              <h2 className="panel-title">Data Backup & Migration</h2>
+            </div>
+            <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '20px' }}>
+              Backup your local database regularly.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <button type="button" className="btn btn-secondary" onClick={exportDataBackup} style={{ justifyContent: 'flex-start' }}>
+                <Download size={16} style={{ color: 'var(--accent)' }} /> Export local database (.JSON)
+              </button>
+              <label className="btn btn-secondary" style={{ justifyContent: 'flex-start', cursor: 'pointer', marginBottom: 0 }}>
+                <Upload size={16} style={{ color: 'var(--info)' }} /> Import database backup
+                <input type="file" accept=".json" onChange={handleImportFile} style={{ display: 'none' }} />
+              </label>
+            </div>
+          </div>
+
+          {/* Card 9: Danger Zone */}
+          <div className="panel" style={{ border: '1px solid var(--danger)', marginBottom: 0 }}>
             <div className="panel-header" style={{ borderBottom: '1px solid var(--danger-muted)' }}>
               <h2 className="panel-title" style={{ color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <ShieldAlert size={16} /> Danger Zone
               </h2>
             </div>
-            
             <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '20px', marginTop: '14px' }}>
-              Permanently wipes every client, project, quote, catalog item, chat, API key, voice selection, persona, and setting stored by QuoteFlow in this browser.
+              Permanently wipes everything.
             </p>
-
-            <div style={{ padding: '12px', marginBottom: '16px', border: '1px solid var(--danger)', background: 'var(--danger-muted)', color: 'var(--danger)', fontSize: '12px', fontWeight: '700' }}>
-              Warning: this cannot be undone. Export a backup first if you may need this data later. You will be asked twice before anything is deleted.
-            </div>
-
-            <button className="btn btn-danger" onClick={handleResetDatabase} style={{ width: '100%' }}>
+            <button type="button" className="btn btn-danger" onClick={handleResetDatabase} style={{ width: '100%' }}>
               <Trash2 size={16} /> Master Reset Everything
             </button>
           </div>
 
         </div>
       </div>
-
-    </div>
+    </form>
   );
 }

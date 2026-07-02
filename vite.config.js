@@ -2,13 +2,14 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import fs from 'node:fs'
 import path from 'node:path'
+import { exec } from 'node:child_process'
 
 const HOST_CONFIG_FILE = path.resolve(process.cwd(), '.quote-flow-host-config.json')
 // Folder on THIS computer where all shared business data lives. Every employee
 // (local or over the tunnel) reads and writes these files, so the data never
 // lives in an individual browser.
 const DATA_DIR = path.resolve(process.cwd(), 'quote-flow-data')
-const DATA_COLLECTIONS = ['projects', 'clients', 'catalog', 'tasks']
+const DATA_COLLECTIONS = ['projects', 'clients', 'catalog', 'tasks', 'knowledgeBase']
 const PUBLIC_CONFIG_FIELDS = [
   'companyName',
   'businessType',
@@ -310,8 +311,10 @@ const hostConfigPlugin = {
         || (pathname === '/api/fish/model' && req.method === 'GET')
         || (pathname === '/api/fish/v1/tts' && req.method === 'POST')
         || pathname === '/api/host-config'
+        || pathname.startsWith('/api/agent')
+        || pathname.startsWith('/api/ollama')
 
-      if ((pathname.startsWith('/api/openrouter') || pathname.startsWith('/api/fish')) && !allowed) {
+      if ((pathname.startsWith('/api/openrouter') || pathname.startsWith('/api/fish') || pathname.startsWith('/api/ollama')) && !allowed) {
         sendJson(res, 404, { error: 'API route not available.' })
         return
       }
@@ -630,6 +633,103 @@ const hostConfigPlugin = {
         sendJson(res, 500, { error: error.message })
       }
     })
+    server.middlewares.use('/api/agent/url', async (req, res) => {
+      try {
+        const q = new URL(req.url, 'http://localhost').searchParams
+        const url = q.get('url')
+        if (!url) {
+          sendJson(res, 400, { error: 'Missing url parameter.' })
+          return
+        }
+        const response = await fetch(url, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+          }
+        })
+        if (!response.ok) throw new Error(`Fetch failed: ${response.status}`)
+        const html = await response.text()
+        const text = html
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 15000)
+        sendJson(res, 200, { content: text })
+      } catch (error) {
+        sendJson(res, 500, { error: error.message })
+      }
+    })
+
+    // -----------------------------------------------------------------------
+    // AGENT RUNTIME: Local-only autonomous coding endpoints
+    // -----------------------------------------------------------------------
+    server.middlewares.use('/api/agent/fs', async (req, res) => {
+      if (req.headers['cf-connecting-ip']) {
+        sendJson(res, 403, { error: 'Agent endpoints are restricted to the local host machine.' })
+        return
+      }
+      try {
+        const body = JSON.parse((await readBody(req)) || '{}')
+        const targetPath = path.resolve(process.cwd(), body.path)
+        
+
+
+        if (req.method === 'POST') {
+          fs.mkdirSync(path.dirname(targetPath), { recursive: true })
+          fs.writeFileSync(targetPath, body.content || '', 'utf8')
+          sendJson(res, 200, { success: true, path: targetPath })
+        } else if (req.method === 'GET') {
+          const q = new URL(req.url, 'http://localhost').searchParams
+          const p = path.resolve(process.cwd(), q.get('path') || '')
+
+          const content = fs.readFileSync(p, 'utf8')
+          sendJson(res, 200, { content })
+        } else {
+          sendJson(res, 405, { error: 'Method not allowed' })
+        }
+      } catch (error) {
+        sendJson(res, 500, { error: error.message })
+      }
+    })
+
+    server.middlewares.use('/api/agent/exec', async (req, res) => {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' })
+      if (req.headers['cf-connecting-ip']) {
+        sendJson(res, 403, { error: 'Agent endpoints are restricted to the local host machine.' })
+        return
+      }
+      try {
+        const body = JSON.parse((await readBody(req)) || '{}')
+        exec(body.command, { cwd: process.cwd() }, (error, stdout, stderr) => {
+          sendJson(res, 200, { 
+            stdout: stdout || '', 
+            stderr: stderr || '', 
+            error: error ? error.message : null 
+          })
+        })
+      } catch (error) {
+        sendJson(res, 500, { error: error.message })
+      }
+    })
+
+    // SPAWN simply returns a 200 OK after acknowledging the prompt, while
+    // actual long-running multi-agent loop orchestration happens here or in the client.
+    // For now, we simulate spawning by returning an agent ID and letting the client
+    // manage the background task state via OpenRouter calls.
+    server.middlewares.use('/api/agent/spawn', async (req, res) => {
+      if (req.method !== 'POST') return sendJson(res, 405, { error: 'Method not allowed' })
+      if (req.headers['cf-connecting-ip']) return sendJson(res, 403, { error: 'Restricted' })
+      try {
+        const body = JSON.parse((await readBody(req)) || '{}')
+        const agentId = 'ag-' + Date.now()
+        // In a full implementation, the Node server would run the OpenRouter loop here.
+        // We return success so the client can begin streaming the sub-agent task.
+        sendJson(res, 200, { success: true, agentId, role: body.role })
+      } catch (error) {
+        sendJson(res, 500, { error: error.message })
+      }
+    })
   },
 }
 
@@ -641,12 +741,19 @@ const injectHostKey = (configField) => (proxy) => {
   })
 }
 
+const removeOrigin = () => (proxy) => {
+  proxy.on('proxyReq', (proxyReq) => {
+    proxyReq.removeHeader('origin');
+    proxyReq.removeHeader('Origin');
+  });
+}
+
 export default defineConfig({
   plugins: [react(), hostConfigPlugin],
   server: {
     allowedHosts: true,
     watch: {
-      ignored: ['**/quote-flow-data/**', '**/.quote-flow-host-config.json']
+      ignored: ['**/quote-flow-data/**', '**/quote-flow-data', '**/.quote-flow-host-config.json', '**/*.log']
     },
     proxy: {
       '/api/fish': {
@@ -662,6 +769,13 @@ export default defineConfig({
         secure: true,
         rewrite: (requestPath) => requestPath.replace(/^\/api\/openrouter/, ''),
         configure: injectHostKey('openRouterKey'),
+      },
+      '/api/ollama': {
+        target: 'http://localhost:11434',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (requestPath) => requestPath.replace(/^\/api\/ollama/, ''),
+        configure: removeOrigin(),
       },
     },
   },

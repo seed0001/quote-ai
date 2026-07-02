@@ -9,6 +9,8 @@ const CLIENTS_KEY = 'quote_ai_clients';
 const SETTINGS_KEY = 'quote_ai_settings';
 const CATALOG_KEY = 'quote_ai_catalog';
 const TASKS_KEY = 'quote_ai_tasks';
+const CONTACTS_KEY = 'quote_ai_contacts';
+const KNOWLEDGE_KEY = 'quote_ai_knowledge';
 
 const DEFAULT_SETTINGS = {
   companyName: 'My Business',
@@ -35,6 +37,13 @@ const DEFAULT_SETTINGS = {
   fishAudioModel: 's2.1-pro-free',
   fishVoiceId: '',
   fishVoiceName: '',
+  theme: 'dark',
+  spacingScale: 1.0,
+  fontScale: 1.0,
+  radius: 0,
+  soundVolume: 0.5,
+  soundEnabled: true,
+  soundPack: 'modern',
 };
 
 // ---------------------------------------------------------------------------
@@ -47,8 +56,8 @@ const DEFAULT_SETTINGS = {
 // per-record POST/PUT/DELETE calls so two employees editing at once don't
 // clobber each other's records.
 // ---------------------------------------------------------------------------
-const cache = { projects: [], clients: [], catalog: [], tasks: [] };
-const LOCAL_KEYS = { projects: PROJECTS_KEY, clients: CLIENTS_KEY, catalog: CATALOG_KEY, tasks: TASKS_KEY };
+const cache = { projects: [], clients: [], catalog: [], tasks: [], contacts: [], knowledgeBase: [] };
+const LOCAL_KEYS = { projects: PROJECTS_KEY, clients: CLIENTS_KEY, catalog: CATALOG_KEY, tasks: TASKS_KEY, contacts: CONTACTS_KEY, knowledgeBase: KNOWLEDGE_KEY };
 
 const mirrorLocal = (name) => {
   try {
@@ -108,6 +117,8 @@ export const initDataStore = () => {
   cache.clients = readLocal(CLIENTS_KEY);
   cache.catalog = readLocal(CATALOG_KEY);
   cache.tasks = readLocal(TASKS_KEY);
+  cache.contacts = readLocal(CONTACTS_KEY);
+  cache.knowledgeBase = readLocal(KNOWLEDGE_KEY);
   if (!localStorage.getItem(SETTINGS_KEY)) {
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(DEFAULT_SETTINGS));
@@ -129,10 +140,14 @@ export const hydrateFromHost = async () => {
     cache.clients = Array.isArray(data.clients) ? data.clients : [];
     cache.catalog = Array.isArray(data.catalog) ? data.catalog : [];
     cache.tasks = Array.isArray(data.tasks) ? data.tasks : [];
+    cache.contacts = Array.isArray(data.contacts) ? data.contacts : [];
+    cache.knowledgeBase = Array.isArray(data.knowledgeBase) ? data.knowledgeBase : [];
     mirrorLocal('projects');
     mirrorLocal('clients');
     mirrorLocal('catalog');
     mirrorLocal('tasks');
+    mirrorLocal('contacts');
+    mirrorLocal('knowledgeBase');
     return true;
   } catch (e) {
     console.error('Host unreachable — using local fallback data.', e);
@@ -149,6 +164,10 @@ export const getClients = () => cache.clients;
 export const getCatalog = () => cache.catalog;
 
 export const getTasks = () => cache.tasks;
+
+export const getContacts = () => cache.contacts;
+
+export const getKnowledgeBase = () => cache.knowledgeBase;
 
 export const getSettings = () => {
   try {
@@ -172,6 +191,8 @@ export const masterResetData = () => {
   cache.clients = [];
   cache.catalog = [];
   cache.tasks = [];
+  cache.contacts = [];
+  cache.knowledgeBase = [];
   const appKeys = [];
   for (let index = 0; index < localStorage.length; index += 1) {
     const key = localStorage.key(index);
@@ -191,6 +212,10 @@ export const saveClients = (clients) => setCollection('clients', clients);
 export const saveCatalog = (catalog) => setCollection('catalog', catalog);
 
 export const saveTasks = (tasks) => setCollection('tasks', tasks);
+
+export const saveContacts = (contacts) => setCollection('contacts', contacts);
+
+export const saveKnowledgeBase = (kb) => setCollection('knowledgeBase', kb);
 
 export const addTask = (task) => {
   const newTask = {
@@ -221,9 +246,59 @@ export const updateTask = (updatedTask) => {
 };
 
 export const deleteTask = (id) => {
-  cache.tasks = cache.tasks.filter(t => t.id !== id);
-  mirrorLocal('tasks');
-  removeRecord('tasks', id);
+  const updated = cache.tasks.filter(t => t.id !== id);
+  setCollection('tasks', updated);
+};
+
+export const addContact = (contact) => {
+  const newContact = {
+    ...contact,
+    id: contact.id || `con-${Date.now()}`
+  };
+  cache.contacts = [...cache.contacts, newContact];
+  mirrorLocal('contacts');
+  postRecord('contacts', newContact);
+  return newContact;
+};
+
+export const updateContact = (updatedContact) => {
+  const index = cache.contacts.findIndex(c => c.id === updatedContact.id);
+  if (index === -1) return false;
+  cache.contacts = cache.contacts.map(c => (c.id === updatedContact.id ? updatedContact : c));
+  mirrorLocal('contacts');
+  putRecord('contacts', updatedContact);
+  return true;
+};
+
+export const deleteContact = (id) => {
+  const updated = cache.contacts.filter(c => c.id !== id);
+  setCollection('contacts', updated);
+};
+
+export const addKnowledgeArticle = (article) => {
+  const newArticle = {
+    title: '', content: '', tags: [],
+    ...article,
+    id: article.id || `kb-${Date.now()}`
+  };
+  cache.knowledgeBase = [...cache.knowledgeBase, newArticle];
+  mirrorLocal('knowledgeBase');
+  postRecord('knowledgeBase', newArticle);
+  return newArticle;
+};
+
+export const updateKnowledgeArticle = (updatedArticle) => {
+  const index = cache.knowledgeBase.findIndex(a => a.id === updatedArticle.id);
+  if (index === -1) return false;
+  cache.knowledgeBase = cache.knowledgeBase.map(a => (a.id === updatedArticle.id ? updatedArticle : a));
+  mirrorLocal('knowledgeBase');
+  putRecord('knowledgeBase', updatedArticle);
+  return true;
+};
+
+export const deleteKnowledgeArticle = (id) => {
+  const updated = cache.knowledgeBase.filter(a => a.id !== id);
+  setCollection('knowledgeBase', updated);
 };
 
 export const saveSettings = (settings) => {
@@ -271,6 +346,9 @@ export const addProject = (project) => {
     changeOrders: project.changeOrders || [],
     checklists: project.checklists || [],
     photos: project.photos || [],
+    artifacts: project.artifacts || [],
+    summary: project.summary || '',
+    logs: project.logs || [],
   };
   cache.projects = [...cache.projects, newProject];
   mirrorLocal('projects');
@@ -468,6 +546,8 @@ export const dispatchNLPActions = (actions, callbacks) => {
   let settings = getSettings();
   let catalog = getCatalog();
   let tasks = getTasks();
+  let contacts = getContacts();
+  let knowledgeBase = getKnowledgeBase();
   let activeProjectId = null;
   let viewChanged = null;
 
@@ -503,6 +583,24 @@ export const dispatchNLPActions = (actions, callbacks) => {
         callbacks.setClients(clients);
         break;
       }
+      case 'CREATE_CONTACT': {
+        addContact(payload);
+        contacts = getContacts();
+        callbacks.setContacts?.(contacts);
+        break;
+      }
+      case 'UPDATE_CONTACT': {
+        updateContact(payload);
+        contacts = getContacts();
+        callbacks.setContacts?.(contacts);
+        break;
+      }
+      case 'DELETE_CONTACT': {
+        deleteContact(payload.id);
+        contacts = getContacts();
+        callbacks.setContacts?.(contacts);
+        break;
+      }
       case 'CREATE_PROJECT': {
         const newProject = addProject({
           ...payload,
@@ -534,6 +632,7 @@ export const dispatchNLPActions = (actions, callbacks) => {
           if (payload.status !== undefined) project.status = payload.status;
           if (payload.startDate !== undefined) project.startDate = payload.startDate;
           if (payload.endDate !== undefined) project.endDate = payload.endDate;
+          if (payload.summary !== undefined) project.summary = payload.summary;
           if (payload.laborRate !== undefined) project.laborRate = evaluateExpression(payload.laborRate);
           if (payload.markupPercent !== undefined) project.markupPercent = evaluateExpression(payload.markupPercent);
           if (payload.taxPercent !== undefined) project.taxPercent = evaluateExpression(payload.taxPercent);
@@ -541,6 +640,21 @@ export const dispatchNLPActions = (actions, callbacks) => {
           projects = getProjects();
           callbacks.setProjects(projects);
           activeProjectId = payload.id;
+        }
+        break;
+      }
+      case 'ADD_PROJECT_LOG': {
+        const project = projects.find(p => p.id === payload.projectId);
+        if (project) {
+          if (!project.logs) project.logs = [];
+          project.logs.push({
+            id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            timestamp: new Date().toISOString(),
+            message: payload.message
+          });
+          updateProject(project);
+          projects = getProjects();
+          callbacks.setProjects(projects);
         }
         break;
       }
@@ -783,6 +897,50 @@ export const dispatchNLPActions = (actions, callbacks) => {
             })
           }).catch(err => console.error("Failed to send AI email", err));
         }
+        break;
+      }
+      case 'WRITE_FILE': {
+        fetch('/api/agent/fs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: payload.path, content: payload.content })
+        }).catch(err => console.error("Agent WRITE_FILE failed", err));
+        break;
+      }
+      case 'READ_FILE': {
+        fetch(`/api/agent/fs?path=${encodeURIComponent(payload.path)}`)
+          .catch(err => console.error("Agent READ_FILE failed", err));
+        break;
+      }
+      case 'RUN_COMMAND': {
+        fetch('/api/agent/exec', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: payload.command })
+        }).catch(err => console.error("Agent RUN_COMMAND failed", err));
+        break;
+      }
+      case 'SPAWN_SUBAGENT': {
+        fetch('/api/agent/spawn', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role: payload.role, task: payload.task })
+        }).catch(err => console.error("Agent SPAWN_SUBAGENT failed", err));
+        break;
+      }
+      case 'CREATE_KNOWLEDGE_ARTICLE': {
+        addKnowledgeArticle(payload);
+        callbacks.setKnowledgeBase?.(getKnowledgeBase());
+        break;
+      }
+      case 'UPDATE_KNOWLEDGE_ARTICLE': {
+        updateKnowledgeArticle(payload);
+        callbacks.setKnowledgeBase?.(getKnowledgeBase());
+        break;
+      }
+      case 'DELETE_KNOWLEDGE_ARTICLE': {
+        deleteKnowledgeArticle(payload.id);
+        callbacks.setKnowledgeBase?.(getKnowledgeBase());
         break;
       }
       default:

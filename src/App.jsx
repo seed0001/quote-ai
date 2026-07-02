@@ -13,8 +13,12 @@ import {
   MessageSquare,
   Package,
   Smartphone,
-  CalendarDays
+  CalendarDays,
+  BookUser,
+  Cpu,
+  BookOpen
 } from 'lucide-react';
+import { playClick, setSoundVolume, setSoundEnabled, setSoundPack } from './utils/soundEngine';
 import {
   getProjects,
   getClients,
@@ -26,11 +30,18 @@ import {
   saveSettings,
   saveCatalog,
   saveTasks,
+  saveContacts,
   initDataStore,
-  hydrateFromHost
+  hydrateFromHost,
+  getContacts,
+  getKnowledgeBase,
+  saveKnowledgeBase
 } from './utils/dataStore';
 import Dashboard from './components/Dashboard';
 import ClientDirectory from './components/ClientDirectory';
+import ContactDirectory from './components/ContactDirectory';
+import AgentWorkspace from './components/AgentWorkspace';
+import KnowledgeBase from './components/KnowledgeBase';
 import QuoteBuilder from './components/QuoteBuilder';
 import ProjectDetail from './components/ProjectDetail';
 import SettingsView from './components/SettingsView';
@@ -45,6 +56,8 @@ export default function App() {
   const [currentView, setCurrentView] = useState('dashboard');
   const [projects, setProjects] = useState([]);
   const [clients, setClients] = useState([]);
+  const [contacts, setContacts] = useState([]);
+  const [knowledgeBase, setKnowledgeBase] = useState([]);
   const [settings, setSettings] = useState({});
   const [catalog, setCatalog] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -58,11 +71,15 @@ export default function App() {
     initDataStore();
     setProjects(getProjects());
     setClients(getClients());
+    setContacts(getContacts());
+    setKnowledgeBase(getKnowledgeBase());
     setCatalog(getCatalog());
     setTasks(getTasks());
     hydrateFromHost().then(() => {
       setProjects(getProjects());
       setClients(getClients());
+      setContacts(getContacts());
+      setKnowledgeBase(getKnowledgeBase());
       setCatalog(getCatalog());
       setTasks(getTasks());
     });
@@ -97,15 +114,60 @@ export default function App() {
       }
     };
     loadHostedConfiguration();
-    
-    // Load theme
-    const storedTheme = localStorage.getItem('quote_ai_theme') || 'dark';
-    setTheme(storedTheme);
-    if (storedTheme === 'light') {
-      document.documentElement.classList.add('light-theme');
-    } else {
-      document.documentElement.classList.remove('light-theme');
+  }, []);
+
+  // Sync settings and UI elements
+  useEffect(() => {
+    if (!settings) return;
+
+    // Programmatic cleanup: if legacy gemini-1.5-pro is active in settings, scrub it out
+    if (settings.openRouterVisionModel?.includes('gemini-1.5-pro') || settings.openRouterModel?.includes('gemini-1.5-pro')) {
+      const cleanedSettings = { ...settings };
+      if (cleanedSettings.openRouterVisionModel?.includes('gemini-1.5-pro')) {
+        cleanedSettings.openRouterVisionModel = '';
+      }
+      if (cleanedSettings.openRouterModel?.includes('gemini-1.5-pro')) {
+        cleanedSettings.openRouterModel = '';
+      }
+      setSettings(cleanedSettings);
+      saveSettings(cleanedSettings);
+      fetch('/api/host-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cleanedSettings),
+      }).catch(err => console.error("Failed to sync cleaned config", err));
+      return;
     }
+
+    // Apply theme class
+    const activeTheme = settings.theme || 'dark';
+    const themeClasses = ['light-theme', 'ocean-theme', 'forest-theme', 'midnight-theme'];
+    themeClasses.forEach(tc => document.documentElement.classList.remove(tc));
+    if (activeTheme !== 'dark') {
+      document.documentElement.classList.add(`${activeTheme}-theme`);
+    }
+
+    // Apply custom scaling variables
+    document.documentElement.style.setProperty('--spacing-scale', settings.spacingScale !== undefined ? settings.spacingScale : '1');
+    document.documentElement.style.setProperty('--font-scale', settings.fontScale !== undefined ? settings.fontScale : '1');
+    document.documentElement.style.setProperty('--radius', `${settings.radius !== undefined ? settings.radius : 0}px`);
+
+    // Apply sounds
+    setSoundVolume(settings.soundVolume !== undefined ? settings.soundVolume : 0.5);
+    setSoundEnabled(settings.soundEnabled !== undefined ? settings.soundEnabled : true);
+    setSoundPack(settings.soundPack || 'modern');
+  }, [settings]);
+
+  // Global click sound cue
+  useEffect(() => {
+    const handleGlobalClick = (e) => {
+      const target = e.target.closest('button, .btn, .menu-item, input[type="button"], input[type="submit"]');
+      if (target) {
+        playClick();
+      }
+    };
+    document.addEventListener('click', handleGlobalClick);
+    return () => document.removeEventListener('click', handleGlobalClick);
   }, []);
 
   // Sync state changes with localStorage
@@ -117,6 +179,16 @@ export default function App() {
   const handleUpdateClients = (newClients) => {
     setClients(newClients);
     saveClients(newClients);
+  };
+
+  const handleUpdateContacts = (newContacts) => {
+    setContacts(newContacts);
+    saveContacts(newContacts);
+  };
+
+  const handleUpdateKnowledgeBase = (newKb) => {
+    setKnowledgeBase(newKb);
+    saveKnowledgeBase(newKb);
   };
 
   const handleUpdateSettings = (newSettings) => {
@@ -135,14 +207,14 @@ export default function App() {
   };
 
   const toggleTheme = () => {
-    const nextTheme = theme === 'dark' ? 'light' : 'dark';
-    setTheme(nextTheme);
-    localStorage.setItem('quote_ai_theme', nextTheme);
-    if (nextTheme === 'light') {
-      document.documentElement.classList.add('light-theme');
-    } else {
-      document.documentElement.classList.remove('light-theme');
-    }
+    const themes = ['dark', 'light', 'ocean', 'forest', 'midnight'];
+    const currentTheme = settings.theme || 'dark';
+    const nextIndex = (themes.indexOf(currentTheme) + 1) % themes.length;
+    const nextTheme = themes[nextIndex];
+    
+    const updatedSettings = { ...settings, theme: nextTheme };
+    setSettings(updatedSettings);
+    saveSettings(updatedSettings);
   };
 
   // Helper to open a specific project in the details view
@@ -182,6 +254,22 @@ export default function App() {
             onClientsChange={handleUpdateClients} 
             onViewProject={viewProjectDetails}
             onEditQuote={editProjectQuote}
+          />
+        );
+      case 'contacts':
+        return (
+          <ContactDirectory
+            contacts={contacts}
+            onContactsChange={() => handleUpdateContacts(getContacts())}
+          />
+        );
+      case 'agent-workspace':
+        return <AgentWorkspace />;
+      case 'knowledge-base':
+        return (
+          <KnowledgeBase
+            knowledgeBase={knowledgeBase}
+            onKnowledgeBaseChange={handleUpdateKnowledgeBase}
           />
         );
       case 'quote-builder':
@@ -245,6 +333,8 @@ export default function App() {
           <AIChat
             projects={projects}
             clients={clients}
+            contacts={contacts}
+            knowledgeBase={knowledgeBase}
             catalog={catalog}
             tasks={tasks}
             settings={settings}
@@ -306,6 +396,30 @@ export default function App() {
           >
             <Users size={18} />
             Client Directory
+          </div>
+
+          <div 
+            className={`menu-item ${currentView === 'contacts' ? 'active' : ''}`}
+            onClick={() => { setCurrentView('contacts'); setActiveProjectId(null); }}
+          >
+            <BookUser size={18} />
+            Contacts Book
+          </div>
+
+          <div 
+            className={`menu-item ${currentView === 'agent-workspace' ? 'active' : ''}`}
+            onClick={() => { setCurrentView('agent-workspace'); setActiveProjectId(null); }}
+          >
+            <Cpu size={18} />
+            Agent Workspace
+          </div>
+
+          <div 
+            className={`menu-item ${currentView === 'knowledge-base' ? 'active' : ''}`}
+            onClick={() => { setCurrentView('knowledge-base'); setActiveProjectId(null); }}
+          >
+            <BookOpen size={18} />
+            Knowledge Base
           </div>
 
           <div 

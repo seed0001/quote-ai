@@ -9,6 +9,8 @@
 //   validated against the live database context. Invalid actions are dropped so
 //   they can never corrupt the local database.
 
+import { saveSettings } from './dataStore';
+
 const OPENROUTER_URL = '/api/openrouter/api/v1/chat/completions';
 
 const VALID_STATUSES = ['lead', 'quoting', 'scheduled', 'progress', 'completed'];
@@ -19,9 +21,13 @@ const ACTION_SCHEMA = `Available Actions Schema:
 - { "type": "CREATE_CLIENT", "payload": { "name": string, "company": string, "email": string, "phone": string, "address": string, "notes": string, "id": string (optional temporary id, see rules) } }
 - { "type": "UPDATE_CLIENT", "payload": { "id": string, "name": string, "company": string, "email": string, "phone": string, "address": string, "notes": string } }
 - { "type": "DELETE_CLIENT", "payload": { "id": string } }
+- { "type": "CREATE_CONTACT", "payload": { "name": string, "phone": string, "email": string, "address": string, "website": string, "notes": string, "id": string (optional temporary id, see rules) } }
+- { "type": "UPDATE_CONTACT", "payload": { "id": string, "name": string, "phone": string, "email": string, "address": string, "website": string, "notes": string } }
+- { "type": "DELETE_CONTACT", "payload": { "id": string } }
 - { "type": "CREATE_PROJECT", "payload": { "name": string, "clientId": string (optional), "status": "lead"|"quoting"|"scheduled"|"progress"|"completed", "id": string (optional temporary id, see rules) } }
 - { "type": "UPDATE_PROJECT_STATUS", "payload": { "id": string, "status": "lead"|"quoting"|"scheduled"|"progress"|"completed" } }
-- { "type": "UPDATE_PROJECT", "payload": { "id": string, "name": string, "clientId": string, "status": "lead"|"quoting"|"scheduled"|"progress"|"completed", "startDate": string, "endDate": string, "laborRate": number|string, "markupPercent": number|string, "taxPercent": number|string } } — use to RE-LINK a project to a different client (clientId), rename it, or change its dates/rates. Only include the fields you are changing.
+- { "type": "UPDATE_PROJECT", "payload": { "id": string, "name": string, "clientId": string, "status": "lead"|"quoting"|"scheduled"|"progress"|"completed", "summary": string, "startDate": string, "endDate": string, "laborRate": number|string, "markupPercent": number|string, "taxPercent": number|string } } — use to RE-LINK a project to a different client (clientId), rename it, update its summary, or change its dates/rates. Only include the fields you are changing.
+- { "type": "ADD_PROJECT_LOG", "payload": { "projectId": string, "message": string } } — append a new entry to the rolling activity log to track decisions, discussions, or work done.
 - { "type": "ADD_QUOTE_ITEM", "payload": { "projectId": string, "roomName": string, "name": string, "category": string, "quantity": number|string, "unit": string, "materialCost": number|string, "laborHours": number|string, "catalogId": string } } — catalogId is the id of a Price Catalog product; when set, the system fills the material unit price (and name/unit/category if omitted) from the catalog. ALWAYS set catalogId for any material that exists in the catalog.
 - { "type": "UPDATE_QUOTE_ITEM", "payload": { "projectId": string, "itemId": string, "name": string, "category": string, "quantity": number|string, "unit": string, "materialCost": number|string, "laborHours": number|string, "catalogId": string } }
 - { "type": "DELETE_QUOTE_ITEM", "payload": { "projectId": string, "itemId": string } }
@@ -37,11 +43,18 @@ const ACTION_SCHEMA = `Available Actions Schema:
 - { "type": "UPDATE_TASK", "payload": { "id": string, "title": string, "description": string, "assigneeName": string, "assigneeEmail": string, "date": "YYYY-MM-DD", "time": "HH:MM", "status": "todo"|"in_progress"|"done", "customerOptIn": boolean, "reminderLeadDays": number|string } } — include only the fields you are changing (e.g. just status).
 - { "type": "DELETE_TASK", "payload": { "id": string } }
 - { "type": "SEND_EMAIL_TO_CLIENT", "payload": { "clientId": string, "subject": string, "htmlBody": string } } — use to instantly dispatch a fully drafted email to a client via the backend email engine. Write the htmlBody in professional HTML.
-- { "type": "SWITCH_VIEW", "payload": { "view": "dashboard"|"clients"|"quote-builder"|"project-detail"|"settings"|"calendar", "projectId": string (optional) } }`;
+- { "type": "SWITCH_VIEW", "payload": { "view": "dashboard"|"clients"|"contacts"|"quote-builder"|"project-detail"|"settings"|"calendar"|"agent-workspace", "projectId": string (optional) } }
+- { "type": "WRITE_FILE", "payload": { "path": string, "content": string } } — writes a file to the host file system.
+- { "type": "READ_FILE", "payload": { "path": string } } — reads a file from the host file system.
+- { "type": "RUN_COMMAND", "payload": { "command": string } } — executes a shell command on the host machine.
+- { "type": "SPAWN_SUBAGENT", "payload": { "role": string, "task": string } } — spins up a background AI sub-agent to assist with parallel coding or research.
+- { "type": "CREATE_KNOWLEDGE_ARTICLE", "payload": { "title": string, "content": string, "tags": [string] } } — use to store SOPs, rules, or workflows in your brain.
+- { "type": "UPDATE_KNOWLEDGE_ARTICLE", "payload": { "id": string, "title": string, "content": string, "tags": [string] } }
+- { "type": "DELETE_KNOWLEDGE_ARTICLE", "payload": { "id": string } }`;
 
 // Build the compact DB snapshot the model reasons over. Mirrors the prior
 // inline context-builder so the model sees the same shape it always has.
-export function buildContext({ projects, clients, catalog, tasks = [], activeProjectId, currentView, settings = {} }) {
+export function buildContext({ projects, clients, contacts = [], catalog, tasks = [], knowledgeBase = [], activeProjectId, currentView, settings = {} }) {
   const clientsCtx = clients.map(c => ({
     id: c.id,
     name: c.name,
@@ -69,6 +82,8 @@ export function buildContext({ projects, clients, catalog, tasks = [], activePro
     };
     // Full line-item detail only for the active project to keep the prompt small.
     if (p.id === activeProjectId) {
+      summary.summary = p.summary || '';
+      summary.logs = p.logs || [];
       summary.checklists = (p.checklists || []).map(c => ({ id: c.id, text: c.text, completed: c.completed }));
       summary.changeOrders = (p.changeOrders || []).map(co => ({ id: co.id, title: co.title, status: co.status }));
       summary.rooms = (p.rooms || []).map(r => ({
@@ -107,6 +122,8 @@ export function buildContext({ projects, clients, catalog, tasks = [], activePro
     activeProjectId: activeProjectId || 'None',
     activeProjectName,
     clients: clientsCtx,
+    contacts, // pass entire contacts array since it's a general address book
+    knowledgeBase, // SOPs and internal rules for the AI
     projects: projectsCtx,
     priceCatalog: catalogCtx,
     tasks: tasksCtx
@@ -136,6 +153,18 @@ In THIS step your only job is to THINK. You do NOT execute anything and you do N
 
 Adapt your vocabulary, assumptions, and questions to the configured business profile. A project section may represent a phase, department, deliverable, package, location, room, event, campaign, workstream, or any other useful grouping.
 Follow the personaStatement in the business profile for tone, behavior, and decision-making style, unless it conflicts with accuracy, safety, or these execution rules.
+Note: "Clients" are strictly people or businesses you are doing quoted project work for. "Contacts" are a general address book for friends, family, vendors, and associates. Use the correct creation actions depending on context.
+
+If the user asks you to write code, build an application, research complex subjects, or write to a knowledge base, you CAN do that! You have access to the host machine's terminal, internet search, and file system.
+- Use RUN_COMMAND to setup projects (e.g. \`npx create-vite\`, \`mkdir\`).
+- Use WRITE_FILE to author code or documentation.
+- Use SPAWN_SUBAGENT to hire background AIs to tackle pieces of code, run tests, or conduct deep research on URLs or documentation concurrently (e.g., "Code Researcher", "SOP Analyst").
+When building software or performing research, always outline a comprehensive plan in your "reasoning" block before executing.
+
+KNOWLEDGE BASE (SOPs):
+- The knowledgeBase array contains Standard Operating Procedures (SOPs) on how to execute specific tasks.
+- Before asking the user how to execute a specific workflow, check the knowledgeBase array.
+- If a procedure is undocumented, inform the user that it is missing from the Knowledge Base and ask them to add it or explain the steps so you can create a knowledge article.
 
 This is an ongoing conversation. The prior messages are your memory of it — read them for context and never re-ask for something the user has already told you.
 
@@ -219,15 +248,25 @@ function parseJsonLoose(text) {
     const start = trimmed.indexOf('{');
     const end = trimmed.lastIndexOf('}');
     if (start !== -1 && end > start) {
-      // Re-parse the outermost object span; let this throw on real syntax errors.
-      return JSON.parse(trimmed.slice(start, end + 1));
+      const sliced = trimmed.slice(start, end + 1);
+      try {
+        return JSON.parse(sliced);
+      } catch (sliceErr) {
+        try {
+          // Attempt to fix common small-model errors like trailing commas
+          let fixed = sliced.replace(/,\s*([}\]])/g, '$1');
+          return JSON.parse(fixed);
+        } catch (regexErr) {
+          throw sliceErr; // throw original slice error for repair loop
+        }
+      }
     }
     throw firstErr;
   }
 }
 
 // One OpenRouter chat round-trip. Returns the raw assistant content string.
-async function postChat(messages, settings) {
+async function postChat(messages, settings, jsonMode = true) {
   // Only ever use models the user picked in Settings. If a message carries an
   // image and a dedicated vision model is set, use it; otherwise fall back to
   // the user's main model (which for most modern models handles images too).
@@ -241,39 +280,65 @@ async function postChat(messages, settings) {
     throw new Error('No AI model is selected. Open System Settings and choose an OpenRouter model before using the assistant.');
   }
 
-  const response = await fetch(OPENROUTER_URL, {
+  const isOllama = targetModel.startsWith('ollama/');
+  const actualModel = isOllama ? targetModel.replace('ollama/', '') : targetModel;
+  const endpointUrl = isOllama ? '/api/ollama/api/chat' : OPENROUTER_URL;
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (!isOllama) {
+    headers['HTTP-Referer'] = 'http://localhost:5173/';
+    headers['X-Title'] = 'QuoteFlow Business Estimate Chat';
+  }
+
+  const payload = isOllama 
+    ? {
+        model: actualModel,
+        messages,
+        ...(jsonMode && { format: 'json' }),
+        stream: false,
+        options: { num_predict: MAX_OUTPUT_TOKENS }
+      }
+    : {
+        model: actualModel,
+        messages,
+        ...(jsonMode && { response_format: { type: 'json_object' } }),
+        max_tokens: MAX_OUTPUT_TOKENS
+      };
+
+  const response = await fetch(endpointUrl, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'HTTP-Referer': 'http://localhost:5173/',
-      'X-Title': 'QuoteFlow Business Estimate Chat'
-    },
-    body: JSON.stringify({
-      model: targetModel,
-      messages,
-      response_format: { type: 'json_object' },
-      max_tokens: MAX_OUTPUT_TOKENS
-    })
+    headers,
+    body: JSON.stringify(payload)
   });
 
   if (!response.ok) {
     const errData = await response.json().catch(() => ({}));
-    throw new Error(errData.error?.message || `API Error: ${response.status}`);
+    const errMsg = errData.error?.message || errData.error || `API Error: ${response.status}`;
+    const isModelErr = response.status === 404 || errMsg.toLowerCase().includes('model') || errMsg.toLowerCase().includes('not found') || errMsg.toLowerCase().includes('invalid');
+    if (isModelErr) {
+      throw new Error(`MODEL_NOT_FOUND: ${errMsg}`);
+    }
+    throw new Error(errMsg);
   }
 
   const resData = await response.json();
 
-  // OpenRouter can return HTTP 200 with an error payload (and no choices) — e.g.
-  // when the auto-router lands on a model that rejects the request or rate-limits.
   if (resData.error) {
-    throw new Error(resData.error.message || 'OpenRouter returned an error response.');
+    const errMsg = resData.error.message || resData.error || 'The AI provider returned an error response.';
+    const isModelErr = errMsg.toLowerCase().includes('model') || errMsg.toLowerCase().includes('not found') || errMsg.toLowerCase().includes('invalid');
+    if (isModelErr) {
+      throw new Error(`MODEL_NOT_FOUND: ${errMsg}`);
+    }
+    throw new Error(errMsg);
   }
 
-  const contentText = resData.choices?.[0]?.message?.content;
+  const contentText = isOllama ? resData.message?.content : resData.choices?.[0]?.message?.content;
   if (!contentText) {
-    throw new Error('The model returned no content — it may not support JSON mode. Try pinning a specific model (e.g. Gemini 2.5 Flash or Claude 3.5 Sonnet) in System Settings instead of the auto-router.');
+    throw new Error('The model returned no content. It may have been blocked or encountered an error.');
   }
-  return contentText;
+
+  const finishReason = isOllama ? (resData.done_reason || (resData.done ? 'stop' : 'length')) : resData.choices?.[0]?.finish_reason;
+  return { content: contentText, finishReason };
 }
 
 // Chat call with a self-repair loop: if the reply won't parse as JSON, we send
@@ -288,36 +353,96 @@ async function callOpenRouter({ systemPrompt, history, userMessage, settings }) 
     { role: 'user', content: userMessage }
   ];
 
-  let lastContent = '';
+  let accumulatedContent = '';
   let lastError = null;
+  let isContinuation = false;
 
   for (let attempt = 0; attempt <= MAX_PARSE_RETRIES; attempt++) {
-    const messages = attempt === 0
-      ? baseMessages
-      : [
-          ...baseMessages,
-          { role: 'assistant', content: lastContent },
-          {
-            role: 'user',
-            content: `Your previous response could not be parsed as JSON. The parser reported: "${lastError.message}". Re-read your previous message, locate and fix the error (e.g. a stray sentence, a trailing comma, a missing brace or quote, an unfinished value), and return ONLY the corrected, complete JSON object — no explanation, no markdown code fences.`
-          }
-        ];
+    let messages;
+    
+    if (attempt === 0) {
+      messages = baseMessages;
+    } else if (isContinuation) {
+      messages = [
+        ...baseMessages,
+        { role: 'assistant', content: accumulatedContent },
+        {
+          role: 'user',
+          content: `Your previous response was cut off due to length limits. Please continue EXACTLY where you left off. Do not repeat anything you've already output, just output the remainder of the JSON.`
+        }
+      ];
+    } else {
+      messages = [
+        ...baseMessages,
+        { role: 'assistant', content: accumulatedContent },
+        {
+          role: 'user',
+          content: `Your previous response could not be parsed as JSON. The parser reported: "${lastError?.message || lastError}". Re-read your previous message, locate and fix the error (e.g. a stray sentence, a trailing comma, a missing brace or quote, an unfinished value), and return ONLY the corrected, complete JSON object — no explanation, no markdown code fences.`
+        }
+      ];
+    }
 
-    lastContent = await postChat(messages, settings);
+    let chatResult;
     try {
-      return parseJsonLoose(lastContent);
+      chatResult = await postChat(messages, settings);
+    } catch (err) {
+      if (err.message.startsWith('MODEL_NOT_FOUND:') && settings.openRouterModel !== 'google/gemini-2.0-flash-lite:free') {
+        console.warn(`Model not found, falling back to google/gemini-2.0-flash-lite:free. Original error:`, err.message);
+        settings.openRouterModel = 'google/gemini-2.0-flash-lite:free';
+        if (settings.openRouterVisionModel) {
+          settings.openRouterVisionModel = 'google/gemini-2.0-flash-lite:free';
+        }
+        try {
+          saveSettings(settings);
+          fetch('/api/host-config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(settings),
+          }).catch(e => console.error("Failed to sync fallback config", e));
+        } catch (saveErr) {
+          console.error("Failed to save fallback settings", saveErr);
+        }
+        attempt--; // Retry this attempt with the new model
+        isContinuation = false;
+        continue;
+      }
+      lastError = err;
+      isContinuation = false;
+      console.warn(`Provider error on attempt ${attempt}:`, err);
+      // Wait before retry to handle rate limits or transient errors
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      continue;
+    }
+
+    const { content, finishReason } = chatResult;
+    
+    if (isContinuation) {
+      accumulatedContent += content;
+    } else {
+      accumulatedContent = content;
+    }
+
+    if (finishReason === 'length' || finishReason === 'max_tokens') {
+      isContinuation = true;
+      lastError = new Error('Output cut off by length limits.');
+      continue;
+    }
+
+    try {
+      return parseJsonLoose(accumulatedContent);
     } catch (err) {
       lastError = err;
+      isContinuation = false;
     }
   }
 
-  throw new Error(`The model did not return valid JSON after ${MAX_PARSE_RETRIES + 1} attempts (last parser error: ${lastError?.message}). Try a model with reliable structured output (e.g. Gemini 2.5 Flash or Claude 3.5 Sonnet) in System Settings.`);
+  throw new Error(`The model did not return valid JSON after ${MAX_PARSE_RETRIES + 1} attempts (last parser error: ${lastError?.message || lastError}). Output was: ${accumulatedContent.substring(0, 500)}`);
 }
 
 // Reason why a single action is invalid, or null if it passes. `clientIds` and
 // `projectIds` are mutable sets seeded with existing ids and extended with ids
 // minted earlier in the same batch.
-function actionRejectionReason(action, clientIds, projectIds, catalogIds, taskIds) {
+function actionRejectionReason(action, clientIds, projectIds, catalogIds, taskIds, contactIds, knowledgeBaseIds) {
   if (!action || typeof action !== 'object') return 'malformed action';
   const { type, payload = {} } = action;
   const badCatalogRef = (cid) => cid !== undefined && cid !== '' && !catalogIds.has(cid);
@@ -329,6 +454,12 @@ function actionRejectionReason(action, clientIds, projectIds, catalogIds, taskId
       return clientIds.has(payload.id) ? null : `UPDATE_CLIENT references unknown client "${payload.id}"`;
     case 'DELETE_CLIENT':
       return clientIds.has(payload.id) ? null : `DELETE_CLIENT references unknown client "${payload.id}"`;
+    case 'CREATE_CONTACT':
+      return payload.name ? null : 'CREATE_CONTACT missing name';
+    case 'UPDATE_CONTACT':
+      return contactIds.has(payload.id) ? null : `UPDATE_CONTACT references unknown contact "${payload.id}"`;
+    case 'DELETE_CONTACT':
+      return contactIds.has(payload.id) ? null : `DELETE_CONTACT references unknown contact "${payload.id}"`;
     case 'CREATE_PROJECT':
       if (!payload.name) return 'CREATE_PROJECT missing name';
       if (payload.clientId !== undefined && !clientIds.has(payload.clientId)) return `CREATE_PROJECT references unknown client "${payload.clientId}" — create the client first`;
@@ -343,6 +474,9 @@ function actionRejectionReason(action, clientIds, projectIds, catalogIds, taskId
       if (payload.clientId !== undefined && !clientIds.has(payload.clientId)) return `UPDATE_PROJECT references unknown client "${payload.clientId}"`;
       if (payload.status !== undefined && !VALID_STATUSES.includes(payload.status)) return `UPDATE_PROJECT has invalid status "${payload.status}"`;
       return null;
+    case 'ADD_PROJECT_LOG':
+      if (!projectIds.has(payload.projectId)) return `ADD_PROJECT_LOG references unknown project "${payload.projectId}"`;
+      return payload.message ? null : 'ADD_PROJECT_LOG missing message';
     case 'ADD_QUOTE_ITEM':
       if (!projectIds.has(payload.projectId)) return `ADD_QUOTE_ITEM references unknown project "${payload.projectId}"`;
       if (badCatalogRef(payload.catalogId)) return `ADD_QUOTE_ITEM references unknown catalog product "${payload.catalogId}"`;
@@ -391,6 +525,26 @@ function actionRejectionReason(action, clientIds, projectIds, catalogIds, taskId
       return taskIds.has(payload.id) ? null : `DELETE_TASK references unknown task "${payload.id}"`;
     case 'SWITCH_VIEW':
       return VALID_VIEWS.includes(payload.view) ? null : `SWITCH_VIEW has invalid view "${payload.view}"`;
+    case 'SEND_EMAIL_TO_CLIENT':
+      if (!clientIds.has(payload.clientId)) return `SEND_EMAIL_TO_CLIENT references unknown client "${payload.clientId}"`;
+      if (!payload.subject || !payload.htmlBody) return 'SEND_EMAIL_TO_CLIENT missing subject or htmlBody';
+      return null;
+    case 'WRITE_FILE':
+      return (payload.path && payload.content) ? null : 'WRITE_FILE missing path or content';
+    case 'READ_FILE':
+      return payload.path ? null : 'READ_FILE missing path';
+    case 'RUN_COMMAND':
+      return payload.command ? null : 'RUN_COMMAND missing command';
+    case 'SPAWN_SUBAGENT':
+      return (payload.role && payload.task) ? null : 'SPAWN_SUBAGENT missing role or task';
+    case 'CREATE_KNOWLEDGE_ARTICLE':
+      return (payload.title && payload.content) ? null : 'CREATE_KNOWLEDGE_ARTICLE missing title or content';
+    case 'UPDATE_KNOWLEDGE_ARTICLE':
+      if (!knowledgeBaseIds.has(payload.id)) return `UPDATE_KNOWLEDGE_ARTICLE references unknown article "${payload.id}"`;
+      return null;
+    case 'DELETE_KNOWLEDGE_ARTICLE':
+      if (!knowledgeBaseIds.has(payload.id)) return `DELETE_KNOWLEDGE_ARTICLE references unknown article "${payload.id}"`;
+      return null;
     default:
       return `unknown action type "${type}"`;
   }
@@ -403,13 +557,24 @@ async function webSearch(queries) {
   const found = [];
   for (const query of unique) {
     try {
-      const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
-      const data = await response.json().catch(() => ({}));
-      found.push({
-        query,
-        results: Array.isArray(data.results) ? data.results : [],
-        error: response.ok ? null : (data.error || `search failed (${response.status})`)
-      });
+      const isUrl = /^https?:\/\//i.test(query);
+      if (isUrl) {
+        const response = await fetch(`/api/agent/url?url=${encodeURIComponent(query)}`);
+        const data = await response.json().catch(() => ({}));
+        found.push({
+          query,
+          results: response.ok ? [{ title: `Page Content from ${query}`, url: query, snippet: data.content || 'Empty page.' }] : [],
+          error: response.ok ? null : (data.error || `fetch failed (${response.status})`)
+        });
+      } else {
+        const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+        const data = await response.json().catch(() => ({}));
+        found.push({
+          query,
+          results: Array.isArray(data.results) ? data.results : [],
+          error: response.ok ? null : (data.error || `search failed (${response.status})`)
+        });
+      }
     } catch (e) {
       found.push({ query, results: [], error: e.message });
     }
@@ -421,13 +586,15 @@ async function webSearch(queries) {
 export function validateActions(actions, context) {
   const valid = [];
   const rejected = [];
-  const clientIds = new Set(context.clients.map(c => c.id));
-  const projectIds = new Set(context.projects.map(p => p.id));
+  const clientIds = new Set((context.clients || []).map(c => c.id));
+  const projectIds = new Set((context.projects || []).map(p => p.id));
   const catalogIds = new Set((context.priceCatalog || []).map(i => i.id));
   const taskIds = new Set((context.tasks || []).map(t => t.id));
+  const contactIds = new Set((context.contacts || []).map(c => c.id));
+  const knowledgeBaseIds = new Set((context.knowledgeBase || []).map(k => k.id));
 
   for (const action of actions) {
-    const reason = actionRejectionReason(action, clientIds, projectIds, catalogIds, taskIds);
+    const reason = actionRejectionReason(action, clientIds, projectIds, catalogIds, taskIds, contactIds, knowledgeBaseIds);
     if (reason) {
       rejected.push({ action, reason });
       continue;
@@ -435,9 +602,11 @@ export function validateActions(actions, context) {
     valid.push(action);
     // Register ids minted in this batch so later actions can reference them.
     if (action.type === 'CREATE_CLIENT' && action.payload?.id) clientIds.add(action.payload.id);
+    if (action.type === 'CREATE_CONTACT' && action.payload?.id) contactIds.add(action.payload.id);
     if (action.type === 'CREATE_PROJECT' && action.payload?.id) projectIds.add(action.payload.id);
     if (action.type === 'CREATE_CATALOG_ITEM' && action.payload?.id) catalogIds.add(action.payload.id);
     if (action.type === 'CREATE_TASK' && action.payload?.id) taskIds.add(action.payload.id);
+    if (action.type === 'CREATE_KNOWLEDGE_ARTICLE' && action.payload?.id) knowledgeBaseIds.add(action.payload.id);
   }
 
   return { valid, rejected };
@@ -508,4 +677,18 @@ export async function runAgent({ userMessage, history, context, settings, onPhas
   }
 
   return { decision: 'ACT', reasoning, actions: valid, response, rejected };
+}
+
+// Enhances a persona string using the configured AI model.
+export async function enhancePersona(currentPersona, settings) {
+  const messages = [
+    {
+      role: 'system',
+      content: 'You are an expert prompt engineer. The user will provide a rough draft of an AI persona or instructions. Your job is to enhance it into a highly effective, professional, and detailed system prompt. Add structure, specify tone, clarify decision-making boundaries, and make it robust. Return ONLY the enhanced persona text. Do not wrap it in quotes or markdown formatting, just the raw text.'
+    },
+    { role: 'user', content: currentPersona || 'You are a helpful assistant for a quoting and business management app.' }
+  ];
+
+  const result = await postChat(messages, settings, false);
+  return result.content.trim();
 }
