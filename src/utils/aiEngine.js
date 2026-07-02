@@ -21,8 +21,8 @@ const ACTION_SCHEMA = `Available Actions Schema:
 - { "type": "CREATE_CLIENT", "payload": { "name": string, "company": string, "email": string, "phone": string, "address": string, "notes": string, "id": string (optional temporary id, see rules) } }
 - { "type": "UPDATE_CLIENT", "payload": { "id": string, "name": string, "company": string, "email": string, "phone": string, "address": string, "notes": string } }
 - { "type": "DELETE_CLIENT", "payload": { "id": string } }
-- { "type": "CREATE_CONTACT", "payload": { "name": string, "phone": string, "email": string, "address": string, "website": string, "notes": string, "id": string (optional temporary id, see rules) } }
-- { "type": "UPDATE_CONTACT", "payload": { "id": string, "name": string, "phone": string, "email": string, "address": string, "website": string, "notes": string } }
+- { "type": "CREATE_CONTACT", "payload": { "name": string, "phone": string, "email": string, "address": string, "website": string, "carrier": string (optional, e.g. "AT&T"|"Verizon"|"T-Mobile"|"Sprint"|"Boost Mobile"|"Cricket"|"MetroPCS"|"Virgin Mobile"), "notes": string, "id": string (optional temporary id, see rules) } }
+- { "type": "UPDATE_CONTACT", "payload": { "id": string, "name": string, "phone": string, "email": string, "address": string, "website": string, "carrier": string (optional), "notes": string } }
 - { "type": "DELETE_CONTACT", "payload": { "id": string } }
 - { "type": "CREATE_PROJECT", "payload": { "name": string, "clientId": string (optional), "status": "lead"|"quoting"|"scheduled"|"progress"|"completed", "id": string (optional temporary id, see rules) } }
 - { "type": "UPDATE_PROJECT_STATUS", "payload": { "id": string, "status": "lead"|"quoting"|"scheduled"|"progress"|"completed" } }
@@ -43,6 +43,7 @@ const ACTION_SCHEMA = `Available Actions Schema:
 - { "type": "UPDATE_TASK", "payload": { "id": string, "title": string, "description": string, "assigneeName": string, "assigneeEmail": string, "date": "YYYY-MM-DD", "time": "HH:MM", "status": "todo"|"in_progress"|"done", "customerOptIn": boolean, "reminderLeadDays": number|string } } — include only the fields you are changing (e.g. just status).
 - { "type": "DELETE_TASK", "payload": { "id": string } }
 - { "type": "SEND_EMAIL_TO_CLIENT", "payload": { "clientId": string, "subject": string, "htmlBody": string } } — use to instantly dispatch a fully drafted email to a client via the backend email engine. Write the htmlBody in professional HTML.
+- { "type": "SEND_SMS", "payload": { "to": string[] (array of phone numbers or contact IDs), "message": string } } — sends an SMS text message to one or more phone numbers or contact IDs via carrier email-to-SMS gateway.
 - { "type": "SWITCH_VIEW", "payload": { "view": "dashboard"|"clients"|"contacts"|"quote-builder"|"project-detail"|"settings"|"calendar"|"agent-workspace", "projectId": string (optional) } }
 - { "type": "WRITE_FILE", "payload": { "path": string, "content": string } } — writes a file to the host file system.
 - { "type": "READ_FILE", "payload": { "path": string } } — reads a file from the host file system.
@@ -528,6 +529,9 @@ function actionRejectionReason(action, clientIds, projectIds, catalogIds, taskId
     case 'SEND_EMAIL_TO_CLIENT':
       if (!clientIds.has(payload.clientId)) return `SEND_EMAIL_TO_CLIENT references unknown client "${payload.clientId}"`;
       if (!payload.subject || !payload.htmlBody) return 'SEND_EMAIL_TO_CLIENT missing subject or htmlBody';
+      return null;
+    case 'SEND_SMS':
+      if (!payload.to || !payload.message) return 'SEND_SMS missing to or message';
       return null;
     case 'WRITE_FILE':
       return (payload.path && payload.content) ? null : 'WRITE_FILE missing path or content';

@@ -899,6 +899,59 @@ export const dispatchNLPActions = (actions, callbacks) => {
         }
         break;
       }
+      case 'SEND_SMS': {
+        const toList = Array.isArray(payload.to) ? payload.to : [payload.to];
+        const msg = payload.message || '';
+        toList.forEach(dest => {
+          let phone = '';
+          let carrier = '';
+          const contact = cache.contacts.find(c => c.id === dest || c.name === dest);
+          if (contact) {
+            phone = contact.phone;
+            carrier = contact.carrier;
+          } else {
+            const client = cache.clients.find(c => c.id === dest || c.name === dest);
+            if (client) {
+              phone = client.phone;
+              carrier = client.carrier;
+            } else {
+              phone = dest;
+            }
+          }
+          if (phone) {
+            const cleanedPhone = phone.replace(/\D/g, '');
+            const baseNum = cleanedPhone.length === 11 && cleanedPhone.startsWith('1') ? cleanedPhone.slice(1) : cleanedPhone;
+            const gateways = {
+              'AT&T': 'txt.att.net',
+              'Verizon': 'vtext.com',
+              'T-Mobile': 'tmomail.net',
+              'Sprint': 'messaging.sprintpcs.com',
+              'Boost Mobile': 'myboostmobile.com',
+              'Cricket': 'sms.cricketwireless.net',
+              'MetroPCS': 'mymetropcs.com',
+              'Virgin Mobile': 'vmobl.com'
+            };
+            let activeCarrier = carrier;
+            if (!activeCarrier) {
+              const matchedContact = cache.contacts.find(c => c.phone && c.phone.replace(/\D/g, '').includes(baseNum));
+              if (matchedContact) activeCarrier = matchedContact.carrier;
+            }
+            const domain = gateways[activeCarrier];
+            if (domain) {
+              fetch('/api/email/send', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  clientEmail: `${baseNum}@${domain}`,
+                  subject: '',
+                  htmlBody: msg
+                })
+              }).catch(err => console.error("Failed to dispatch SMS", err));
+            }
+          }
+        });
+        break;
+      }
       case 'WRITE_FILE': {
         fetch('/api/agent/fs', {
           method: 'POST',
@@ -957,4 +1010,48 @@ export const dispatchNLPActions = (actions, callbacks) => {
   } else if (activeProjectId) {
     callbacks.setActiveProjectId(activeProjectId);
   }
+};
+
+export const sendSMS = ({ to, message }) => {
+  const toList = Array.isArray(to) ? to : [to];
+  const gateways = {
+    'AT&T': 'txt.att.net',
+    'Verizon': 'vtext.com',
+    'T-Mobile': 'tmomail.net',
+    'Sprint': 'messaging.sprintpcs.com',
+    'Boost Mobile': 'myboostmobile.com',
+    'Cricket': 'sms.cricketwireless.net',
+    'MetroPCS': 'mymetropcs.com',
+    'Virgin Mobile': 'vmobl.com'
+  };
+
+  toList.forEach(dest => {
+    let phone = '';
+    let carrier = '';
+    const contact = cache.contacts.find(c => c.id === dest || c.phone === dest);
+    if (contact) {
+      phone = contact.phone;
+      carrier = contact.carrier;
+    } else {
+      phone = dest;
+      const matched = cache.contacts.find(c => c.phone && c.phone.replace(/\D/g, '') === dest.replace(/\D/g, ''));
+      if (matched) carrier = matched.carrier;
+    }
+    if (phone) {
+      const cleaned = phone.replace(/\D/g, '');
+      const baseNum = cleaned.length === 11 && cleaned.startsWith('1') ? cleaned.slice(1) : cleaned;
+      const domain = gateways[carrier];
+      if (domain) {
+        fetch('/api/email/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            clientEmail: `${baseNum}@${domain}`,
+            subject: '',
+            htmlBody: message
+          })
+        }).catch(err => console.error("Failed to send SMS via proxy", err));
+      }
+    }
+  });
 };
