@@ -17,6 +17,12 @@ dist-ssr
 quote-flow-data/
 CLOUDFLARE_TUNNEL.log
 
+# Portal: local database and secrets never leave the machine
+portal/data/
+portal/.env
+portal/.npm-cache/
+.env
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

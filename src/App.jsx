@@ -35,7 +35,9 @@ import {
   hydrateFromHost,
   getContacts,
   getKnowledgeBase,
-  saveKnowledgeBase
+  saveKnowledgeBase,
+  getPortalMessages,
+  savePortalMessages
 } from './utils/dataStore';
 import Dashboard from './components/Dashboard';
 import ClientDirectory from './components/ClientDirectory';
@@ -61,6 +63,7 @@ export default function App() {
   const [settings, setSettings] = useState({});
   const [catalog, setCatalog] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const [portalMessages, setPortalMessages] = useState([]);
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [theme, setTheme] = useState('dark');
 
@@ -75,6 +78,7 @@ export default function App() {
     setKnowledgeBase(getKnowledgeBase());
     setCatalog(getCatalog());
     setTasks(getTasks());
+    setPortalMessages(getPortalMessages());
     hydrateFromHost().then(() => {
       setProjects(getProjects());
       setClients(getClients());
@@ -82,6 +86,7 @@ export default function App() {
       setKnowledgeBase(getKnowledgeBase());
       setCatalog(getCatalog());
       setTasks(getTasks());
+      setPortalMessages(getPortalMessages());
     });
     const localSettings = getSettings();
     setSettings(localSettings);
@@ -213,6 +218,11 @@ export default function App() {
     saveTasks(newTasks);
   };
 
+  const handleUpdatePortalMessages = (newMessages) => {
+    setPortalMessages(newMessages);
+    savePortalMessages(newMessages);
+  };
+
   const toggleTheme = () => {
     const themes = ['dark', 'light', 'ocean', 'forest', 'midnight'];
     const currentTheme = settings.theme || 'dark';
@@ -255,12 +265,15 @@ export default function App() {
         );
       case 'clients':
         return (
-          <ClientDirectory 
-            clients={clients} 
+          <ClientDirectory
+            clients={clients}
             projects={projects}
-            onClientsChange={handleUpdateClients} 
+            onClientsChange={handleUpdateClients}
             onViewProject={viewProjectDetails}
             onEditQuote={editProjectQuote}
+            portalMessages={portalMessages}
+            onPortalMessagesChange={handleUpdatePortalMessages}
+            settings={settings}
           />
         );
       case 'contacts':
@@ -397,12 +410,17 @@ export default function App() {
             Dashboard
           </div>
           
-          <div 
+          <div
             className={`menu-item ${currentView === 'clients' ? 'active' : ''}`}
             onClick={() => { setCurrentView('clients'); setActiveProjectId(null); }}
           >
             <Users size={18} />
             Client Directory
+            {portalMessages.some(m => m.from === 'client' && !m.read) && (
+              <span style={{ marginLeft: 'auto', backgroundColor: 'var(--accent)', color: '#fff', fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '10px' }}>
+                {portalMessages.filter(m => m.from === 'client' && !m.read).length}
+              </span>
+            )}
           </div>
 
           <div 

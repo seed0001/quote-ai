@@ -9,7 +9,7 @@ const HOST_CONFIG_FILE = path.resolve(process.cwd(), '.quote-flow-host-config.js
 // (local or over the tunnel) reads and writes these files, so the data never
 // lives in an individual browser.
 const DATA_DIR = path.resolve(process.cwd(), 'quote-flow-data')
-const DATA_COLLECTIONS = ['projects', 'clients', 'catalog', 'tasks', 'knowledgeBase']
+const DATA_COLLECTIONS = ['projects', 'clients', 'catalog', 'tasks', 'knowledgeBase', 'contacts', 'portalMessages']
 const PUBLIC_CONFIG_FIELDS = [
   'companyName',
   'businessType',
@@ -34,6 +34,7 @@ const PUBLIC_CONFIG_FIELDS = [
   'fishVoiceName',
   'notificationFromEmail',
   'team',
+  'portalUrl',
 ]
 
 const readHostConfig = () => {
@@ -59,6 +60,7 @@ const publicHostConfig = () => {
     tavilyConfigured: Boolean(config.tavilyKey),
     braveSearchConfigured: Boolean(config.braveSearchKey),
     stripeConfigured: Boolean(config.stripeKey),
+    portalSyncConfigured: Boolean(config.portalSyncKey),
   }
 }
 
@@ -299,6 +301,208 @@ const startReminderScheduler = () => {
   // Kick once shortly after boot, then every 5 minutes.
   setTimeout(() => { runReminderScheduler().catch((e) => console.error('Scheduler error', e)) }, 10_000)
   setInterval(() => { runReminderScheduler().catch((e) => console.error('Scheduler error', e)) }, 5 * 60 * 1000)
+  // Portal sync rides its own faster loop so client messages arrive promptly.
+  setTimeout(() => { runPortalSync().catch((e) => console.error('Portal sync error', e)) }, 15_000)
+  setInterval(() => { runPortalSync().catch((e) => console.error('Portal sync error', e)) }, 2 * 60 * 1000)
+}
+
+// ---- Client portal -------------------------------------------------------
+// Clients reach the portal through a per-client magic link (/portal?token=…).
+// Every portal endpoint resolves the token to ONE client record and only ever
+// reads or writes data belonging to that client — a portal visitor must never
+// be able to touch /api/data or another client's records.
+const PORTAL_CHAT_LIMIT = 20 // AI messages per client per hour
+
+const portalChatHits = new Map() // token -> [timestamps]
+
+const portalClientByToken = (token) => {
+  if (typeof token !== 'string' || token.length < 12) return null
+  return readCollection('clients').find((c) => c.portalToken === token && c.portalEnabled !== false) || null
+}
+
+// The client-safe view of their projects: progress and payment info only.
+// Internal economics (labor rate, markup, quote line items) stay out.
+const portalProjects = (clientId) =>
+  readCollection('projects')
+    .filter((p) => p.clientId === clientId)
+    .map((p) => ({
+      id: p.id,
+      name: p.name,
+      status: p.status || 'lead',
+      summary: p.summary || '',
+      startDate: p.startDate || '',
+      endDate: p.endDate || '',
+      logs: (p.logs || []).map((l) => ({ id: l.id, timestamp: l.timestamp, message: l.message })),
+      photos: (p.photos || []).map((ph) => ({ id: ph.id, url: ph.url, title: ph.title || '', phase: ph.phase || '', date: ph.date || '' })),
+      milestones: (p.milestones || []).map((m) => ({
+        id: m.id,
+        name: m.name,
+        description: m.description || '',
+        amount: Number(m.amount) || 0,
+        status: m.status === 'paid' ? 'paid' : 'pending',
+        paidAt: m.paidAt || null,
+      })),
+      checklistProgress: {
+        total: (p.checklists || []).length,
+        done: (p.checklists || []).filter((c) => c.completed).length,
+      },
+    }))
+
+const portalMessagesFor = (clientId) =>
+  readCollection('portalMessages')
+    .filter((m) => m.clientId === clientId)
+    .sort((a, b) => String(a.timestamp).localeCompare(String(b.timestamp)))
+
+const notifyOwner = (config, subject, bodyHtml) => {
+  const to = config.email || ''
+  if (!config.resendKey || !to) return
+  sendEmail({
+    apiKey: config.resendKey,
+    from: config.notificationFromEmail || 'QuoteFlow <onboarding@resend.dev>',
+    to,
+    subject,
+    html: emailShell(config.companyName || 'QuoteFlow', subject, bodyHtml),
+  })
+}
+
+// ---- Cloud portal sync ----------------------------------------------------
+// The hub is the only side that opens connections: it PUSHES published client
+// data to the cloud portal and PULLS new client messages/payments back. The
+// portal (Railway) never connects into this machine.
+let portalSyncRunning = false
+
+const runPortalSync = async () => {
+  if (portalSyncRunning) return { skipped: true }
+  const config = readHostConfig()
+  const baseUrl = String(config.portalUrl || '').trim().replace(/\/+$/, '')
+  const key = String(config.portalSyncKey || '').trim()
+  if (!baseUrl || !key) return { configured: false }
+  portalSyncRunning = true
+  const summary = { configured: true, ok: true, publishedProjects: 0, newMessages: 0, newPayments: 0 }
+  try {
+    const headers = { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }
+    const clients = readCollection('clients')
+    // Anyone who was EVER portal-enabled must keep syncing, so that disabling
+    // them locally actually deactivates their portal account too.
+    const syncableClients = clients.filter((c) => c.email && c.portalEnabled !== undefined)
+    const activeClients = syncableClients.filter((c) => c.portalEnabled)
+
+    // ---- PUBLISH ----
+    const projects = []
+    activeClients.forEach((c) => {
+      portalProjects(c.id).forEach((p) => projects.push({ ...p, clientId: c.id }))
+    })
+    const allMessages = readCollection('portalMessages')
+    const replies = allMessages.filter((m) => m.from === 'owner' && !m.syncedToPortal)
+
+    const publishRes = await fetch(`${baseUrl}/api/sync/publish`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        business: {
+          companyName: config.companyName || '',
+          businessDescription: config.businessDescription || '',
+          companyLogo: config.companyLogo || '',
+          email: config.email || '',
+          phone: config.phone || '',
+        },
+        clients: syncableClients.map((c) => ({
+          id: c.id,
+          name: c.name,
+          company: c.company || '',
+          email: c.email,
+          active: Boolean(c.portalEnabled),
+          password: c.portalPasswordPending || undefined,
+        })),
+        projects,
+        fullProjectList: true,
+        replies: replies.map((r) => ({ id: r.id, clientId: r.clientId, text: r.text, timestamp: r.timestamp })),
+      }),
+    })
+    if (!publishRes.ok) {
+      const err = await publishRes.json().catch(() => ({}))
+      throw new Error(err.error || `Portal publish failed (${publishRes.status})`)
+    }
+    summary.publishedProjects = projects.length
+
+    // Publish succeeded: pending passwords are now set on the portal, and
+    // replies are delivered — clear the local bookkeeping.
+    if (clients.some((c) => c.portalPasswordPending)) {
+      writeCollection('clients', clients.map((c) => {
+        if (!c.portalPasswordPending) return c
+        const { portalPasswordPending: _pw, ...rest } = c
+        return { ...rest, portalPasswordSetAt: new Date().toISOString() }
+      }))
+    }
+    if (replies.length > 0) {
+      writeCollection('portalMessages', allMessages.map((m) =>
+        replies.some((r) => r.id === m.id) ? { ...m, syncedToPortal: true } : m
+      ))
+    }
+
+    // ---- PULL ----
+    const pullRes = await fetch(`${baseUrl}/api/sync/pull`, { headers })
+    if (!pullRes.ok) throw new Error(`Portal pull failed (${pullRes.status})`)
+    const pulled = await pullRes.json()
+    const clientName = (id) => clients.find((c) => c.id === id)?.name || 'A client'
+
+    const incomingMessages = Array.isArray(pulled.messages) ? pulled.messages : []
+    if (incomingMessages.length > 0) {
+      const current = readCollection('portalMessages')
+      const known = new Set(current.map((m) => m.id))
+      for (const m of incomingMessages) {
+        if (known.has(m.id)) continue
+        current.push({ id: m.id, clientId: m.clientId, from: 'client', text: m.text, timestamp: m.timestamp, read: false, syncedToPortal: true })
+        notifyOwner(config, `New portal message from ${clientName(m.clientId)}`,
+          `<p>${escapeHtml(m.text)}</p><p style="color:#718096">Reply from the Client Directory in QuoteFlow.</p>`)
+        summary.newMessages += 1
+      }
+      writeCollection('portalMessages', current)
+    }
+
+    const incomingPayments = Array.isArray(pulled.payments) ? pulled.payments : []
+    if (incomingPayments.length > 0) {
+      const allProjects = readCollection('projects')
+      let changed = false
+      for (const pay of incomingPayments) {
+        const project = allProjects.find((p) => p.id === pay.projectId)
+        const milestone = project ? (project.milestones || []).find((m) => m.id === pay.milestoneId) : null
+        if (project && milestone && milestone.status !== 'paid') {
+          milestone.status = 'paid'
+          milestone.paidAt = pay.paidAt
+          milestone.stripeSessionId = pay.stripeSession
+          project.logs = project.logs || []
+          project.logs.push({
+            id: `log-${Date.now()}-psync-${summary.newPayments}`,
+            timestamp: new Date().toISOString(),
+            message: `Client paid milestone "${milestone.name}" ($${(Number(pay.amount) || 0).toFixed(2)}) through the portal.`,
+          })
+          changed = true
+          notifyOwner(config, `Payment received: ${milestone.name}`,
+            `<p><strong>${escapeHtml(clientName(pay.clientId))}</strong> paid <strong>$${(Number(pay.amount) || 0).toFixed(2)}</strong> for milestone <strong>${escapeHtml(milestone.name)}</strong> on project <strong>${escapeHtml(project.name)}</strong>.</p>`)
+        }
+        summary.newPayments += 1
+      }
+      if (changed) writeCollection('projects', allProjects)
+    }
+
+    // ---- ACK ---- (only after the pulled records are safely written locally)
+    if (incomingMessages.length > 0 || incomingPayments.length > 0) {
+      await fetch(`${baseUrl}/api/sync/ack`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          messageIds: incomingMessages.map((m) => m.id),
+          paymentIds: incomingPayments.map((p) => p.id),
+        }),
+      })
+    }
+    return summary
+  } catch (error) {
+    return { ...summary, ok: false, error: error.message }
+  } finally {
+    portalSyncRunning = false
+  }
 }
 
 const hostConfigPlugin = {
@@ -376,6 +580,8 @@ const hostConfigPlugin = {
           if (incoming.tavilyKey) next.tavilyKey = String(incoming.tavilyKey).trim()
           if (incoming.braveSearchKey) next.braveSearchKey = String(incoming.braveSearchKey).trim()
           if (incoming.stripeKey) next.stripeKey = String(incoming.stripeKey).trim()
+          if (incoming.portalSyncKey) next.portalSyncKey = String(incoming.portalSyncKey).trim()
+          if (incoming.portalUrl !== undefined) next.portalUrl = String(incoming.portalUrl).trim().replace(/\/+$/, '')
           fs.writeFileSync(HOST_CONFIG_FILE, JSON.stringify(next, null, 2), 'utf8')
           sendJson(res, 200, publicHostConfig())
         } catch (error) {
@@ -415,11 +621,35 @@ const hostConfigPlugin = {
         // The reminder scheduler owns each task's `notify` bookkeeping. Never
         // let a client write clobber it, or status/reminder emails misfire.
         const preserveServerFields = (incoming, existing) => {
-          if (collection !== 'tasks') return incoming
-          const merged = { ...incoming }
-          delete merged.notify
-          if (existing && existing.notify !== undefined) merged.notify = existing.notify
-          return merged
+          if (collection === 'tasks') {
+            const merged = { ...incoming }
+            delete merged.notify
+            if (existing && existing.notify !== undefined) merged.notify = existing.notify
+            return merged
+          }
+          // Stripe payment records are owned by the server (portal
+          // verify-payment). A stale employee save must never un-pay or drop a
+          // milestone the client already paid for.
+          if (collection === 'projects' && existing && Array.isArray(existing.milestones)) {
+            const paid = new Map(
+              existing.milestones
+                .filter((m) => m.status === 'paid' && m.stripeSessionId)
+                .map((m) => [m.id, m])
+            )
+            if (paid.size > 0) {
+              const merged = { ...incoming }
+              merged.milestones = (Array.isArray(merged.milestones) ? merged.milestones : []).map((m) =>
+                paid.has(m.id)
+                  ? { ...m, status: 'paid', paidAt: paid.get(m.id).paidAt, stripeSessionId: paid.get(m.id).stripeSessionId }
+                  : m
+              )
+              paid.forEach((m, mid) => {
+                if (!merged.milestones.some((x) => x.id === mid)) merged.milestones.push(m)
+              })
+              return merged
+            }
+          }
+          return incoming
         }
 
         // POST /api/data/:collection — create one record.
@@ -637,6 +867,256 @@ const hostConfigPlugin = {
         sendJson(res, 500, { error: error.message })
       }
     })
+    // Trigger a cloud-portal sync now (employees may use this; it only pushes
+    // data that is already marked portal-visible).
+    server.middlewares.use('/api/portal-sync', async (req, res) => {
+      if (req.method !== 'POST') {
+        sendJson(res, 405, { error: 'Method not allowed' })
+        return
+      }
+      const result = await runPortalSync()
+      sendJson(res, result.ok === false ? 502 : 200, result)
+    })
+
+    // -----------------------------------------------------------------------
+    // CLIENT PORTAL: token-scoped endpoints, safe to expose over the tunnel.
+    // -----------------------------------------------------------------------
+    server.middlewares.use('/api/portal', async (req, res) => {
+      const url = new URL(req.url, 'http://localhost')
+      const route = url.pathname // '/api/portal' mount prefix already stripped
+      try {
+        if (req.method === 'GET' && (route === '/session' || route === '/messages')) {
+          const client = portalClientByToken(url.searchParams.get('token'))
+          if (!client) {
+            sendJson(res, 401, { error: 'This portal link is invalid or has been disabled.' })
+            return
+          }
+          if (route === '/messages') {
+            sendJson(res, 200, { messages: portalMessagesFor(client.id) })
+            return
+          }
+          const config = readHostConfig()
+          sendJson(res, 200, {
+            client: { name: client.name, company: client.company || '', email: client.email || '' },
+            business: {
+              companyName: config.companyName || 'QuoteFlow',
+              businessDescription: config.businessDescription || '',
+              companyLogo: config.companyLogo || '',
+              email: config.email || '',
+              phone: config.phone || '',
+            },
+            projects: portalProjects(client.id),
+            messages: portalMessagesFor(client.id),
+            aiEnabled: Boolean(config.openRouterKey && config.openRouterModel),
+            paymentsEnabled: Boolean(config.stripeKey),
+          })
+          return
+        }
+
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { error: 'Method not allowed' })
+          return
+        }
+
+        const body = JSON.parse((await readBody(req)) || '{}')
+        const client = portalClientByToken(body.token)
+        if (!client) {
+          sendJson(res, 401, { error: 'This portal link is invalid or has been disabled.' })
+          return
+        }
+        const config = readHostConfig()
+
+        // POST /api/portal/message — client sends the team a message.
+        if (route === '/message') {
+          const text = String(body.text || '').trim().slice(0, 4000)
+          if (!text) {
+            sendJson(res, 400, { error: 'Message text is required.' })
+            return
+          }
+          const messages = readCollection('portalMessages')
+          const saved = {
+            id: `pm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            clientId: client.id,
+            from: 'client',
+            text,
+            timestamp: new Date().toISOString(),
+            read: false,
+          }
+          messages.push(saved)
+          writeCollection('portalMessages', messages)
+          notifyOwner(config, `New portal message from ${client.name}`,
+            `<p>${escapeHtml(text)}</p><p style="color:#718096">Reply from the Client Directory in QuoteFlow.</p>`)
+          sendJson(res, 200, saved)
+          return
+        }
+
+        // POST /api/portal/chat — AI assistant scoped to this client's data.
+        if (route === '/chat') {
+          if (!config.openRouterKey || !config.openRouterModel) {
+            sendJson(res, 400, { error: 'The assistant is not available right now.' })
+            return
+          }
+          const now = Date.now()
+          const hits = (portalChatHits.get(client.portalToken) || []).filter((t) => now - t < 60 * 60 * 1000)
+          if (hits.length >= PORTAL_CHAT_LIMIT) {
+            sendJson(res, 429, { error: 'You have reached the assistant limit for this hour. Please try again later, or send us a message instead.' })
+            return
+          }
+          hits.push(now)
+          portalChatHits.set(client.portalToken, hits)
+
+          const history = (Array.isArray(body.messages) ? body.messages : [])
+            .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+            .slice(-16)
+            .map((m) => ({ role: m.role, content: m.content.slice(0, 4000) }))
+
+          // Photos are large data URLs — strip them from the prompt context.
+          const projectContext = portalProjects(client.id).map(({ photos: _photos, ...rest }) => rest)
+          const system = [
+            `You are the client-facing assistant for ${config.companyName || 'our company'}.`,
+            `You are chatting with ${client.name}${client.company ? ` (${client.company})` : ''}, one of our clients, inside their secure client portal.`,
+            config.businessDescription ? `About the business: ${config.businessDescription}` : '',
+            `The client's current project data (JSON): ${JSON.stringify(projectContext)}`,
+            'Be friendly, professional, and concise. Only discuss this client\'s own projects and the company\'s services — never other clients or internal business details.',
+            'You cannot make changes, commitments, quotes, or bookings. When the client needs action or a promise, tell them to use the Messages tab so the team is notified.',
+          ].filter(Boolean).join('\n\n')
+
+          const orRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${(config.openRouterKey || '').trim()}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              model: config.openRouterModel,
+              messages: [{ role: 'system', content: system }, ...history],
+            }),
+          })
+          const data = await orRes.json().catch(() => ({}))
+          if (!orRes.ok) {
+            sendJson(res, 502, { error: data.error?.message || 'The assistant is temporarily unavailable.' })
+            return
+          }
+          sendJson(res, 200, { reply: data.choices?.[0]?.message?.content || '' })
+          return
+        }
+
+        // POST /api/portal/checkout — Stripe Checkout for one milestone.
+        if (route === '/checkout') {
+          if (!config.stripeKey) {
+            sendJson(res, 400, { error: 'Online payments are not enabled yet.' })
+            return
+          }
+          const project = readCollection('projects').find((p) => p.id === body.projectId && p.clientId === client.id)
+          const milestone = project ? (project.milestones || []).find((m) => m.id === body.milestoneId) : null
+          if (!project || !milestone) {
+            sendJson(res, 404, { error: 'Milestone not found.' })
+            return
+          }
+          if (milestone.status === 'paid') {
+            sendJson(res, 400, { error: 'This milestone is already paid.' })
+            return
+          }
+          const amount = Number(milestone.amount)
+          if (!Number.isFinite(amount) || amount <= 0) {
+            sendJson(res, 400, { error: 'This milestone has no payable amount yet.' })
+            return
+          }
+
+          // Send the client back to THIS portal (tunnel or localhost) after paying.
+          const proto = req.headers['x-forwarded-proto'] || 'http'
+          const portalUrl = `${proto}://${req.headers.host}/portal?token=${encodeURIComponent(client.portalToken)}`
+          const form = new URLSearchParams()
+          form.append('payment_method_types[0]', 'card')
+          form.append('line_items[0][price_data][currency]', 'usd')
+          form.append('line_items[0][price_data][product_data][name]', `${project.name} — ${milestone.name}`)
+          form.append('line_items[0][price_data][unit_amount]', Math.round(amount * 100).toString())
+          form.append('line_items[0][quantity]', '1')
+          form.append('mode', 'payment')
+          form.append('success_url', `${portalUrl}&paid_session={CHECKOUT_SESSION_ID}`)
+          form.append('cancel_url', portalUrl)
+          // Metadata lets verify-payment locate the milestone from the session
+          // itself, so a forged sessionId can't mark someone else's work paid.
+          form.append('metadata[projectId]', project.id)
+          form.append('metadata[milestoneId]', milestone.id)
+          form.append('metadata[clientId]', client.id)
+          if (client.email) form.append('customer_email', client.email)
+
+          const stripeRes = await fetch('https://api.stripe.com/v1/checkout/sessions', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${config.stripeKey}`,
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: form.toString(),
+          })
+          const data = await stripeRes.json()
+          if (!stripeRes.ok) {
+            sendJson(res, 502, { error: data.error?.message || 'Stripe error' })
+            return
+          }
+          sendJson(res, 200, { url: data.url })
+          return
+        }
+
+        // POST /api/portal/verify-payment — confirm a session with Stripe and
+        // mark the milestone paid. No webhook needed: the success redirect
+        // carries the session id and we re-check payment_status server-side.
+        if (route === '/verify-payment') {
+          if (!config.stripeKey) {
+            sendJson(res, 400, { error: 'Payments are not enabled.' })
+            return
+          }
+          const sessionId = String(body.sessionId || '')
+          if (!/^cs_[A-Za-z0-9_]+$/.test(sessionId)) {
+            sendJson(res, 400, { error: 'Invalid session id.' })
+            return
+          }
+          const stripeRes = await fetch(`https://api.stripe.com/v1/checkout/sessions/${sessionId}`, {
+            headers: { Authorization: `Bearer ${config.stripeKey}` },
+          })
+          const session = await stripeRes.json()
+          if (!stripeRes.ok) {
+            sendJson(res, 502, { error: session.error?.message || 'Stripe error' })
+            return
+          }
+          const meta = session.metadata || {}
+          if (meta.clientId !== client.id) {
+            sendJson(res, 403, { error: 'This payment belongs to a different client.' })
+            return
+          }
+          if (session.payment_status !== 'paid') {
+            sendJson(res, 200, { paid: false })
+            return
+          }
+
+          const projects = readCollection('projects')
+          const project = projects.find((p) => p.id === meta.projectId)
+          const milestone = project ? (project.milestones || []).find((m) => m.id === meta.milestoneId) : null
+          if (project && milestone && milestone.status !== 'paid') {
+            milestone.status = 'paid'
+            milestone.paidAt = new Date().toISOString()
+            milestone.stripeSessionId = sessionId
+            project.logs = project.logs || []
+            project.logs.push({
+              id: `log-${Date.now()}-portal`,
+              timestamp: new Date().toISOString(),
+              message: `Client paid milestone "${milestone.name}" ($${(Number(milestone.amount) || 0).toFixed(2)}) through the portal.`,
+            })
+            writeCollection('projects', projects)
+            notifyOwner(config, `Payment received: ${milestone.name}`,
+              `<p><strong>${escapeHtml(client.name)}</strong> paid <strong>$${(Number(milestone.amount) || 0).toFixed(2)}</strong> for milestone <strong>${escapeHtml(milestone.name)}</strong> on project <strong>${escapeHtml(project.name)}</strong>.</p>`)
+          }
+          sendJson(res, 200, { paid: true, projectId: meta.projectId, milestoneId: meta.milestoneId })
+          return
+        }
+
+        sendJson(res, 404, { error: 'Unknown portal endpoint.' })
+      } catch (error) {
+        sendJson(res, 500, { error: error.message })
+      }
+    })
+
     server.middlewares.use('/api/agent/url', async (req, res) => {
       try {
         const q = new URL(req.url, 'http://localhost').searchParams

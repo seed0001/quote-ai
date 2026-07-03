@@ -59,6 +59,50 @@ export default function ProjectDetail({
   const [summaryText, setSummaryText] = useState(project.summary || '');
   const [newLogText, setNewLogText] = useState('');
 
+  // Milestone states (client portal payments)
+  const [msName, setMsName] = useState('');
+  const [msDesc, setMsDesc] = useState('');
+  const [msAmount, setMsAmount] = useState('');
+
+  const milestones = project.milestones || [];
+
+  const handleAddMilestone = (e) => {
+    e.preventDefault();
+    const amount = parseFloat(msAmount);
+    if (!msName.trim() || !Number.isFinite(amount) || amount <= 0) return;
+    const newMilestone = {
+      id: `ms-${Date.now()}`,
+      name: msName.trim(),
+      description: msDesc.trim(),
+      amount,
+      status: 'pending',
+    };
+    onUpdateProject({ ...project, milestones: [...milestones, newMilestone] });
+    setMsName('');
+    setMsDesc('');
+    setMsAmount('');
+  };
+
+  const toggleMilestonePaid = (ms) => {
+    // Stripe-verified payments are server-owned; only manual marks can toggle.
+    if (ms.stripeSessionId) return;
+    const updated = milestones.map(m =>
+      m.id === ms.id
+        ? (m.status === 'paid'
+            ? { ...m, status: 'pending', paidAt: undefined }
+            : { ...m, status: 'paid', paidAt: new Date().toISOString() })
+        : m
+    );
+    onUpdateProject({ ...project, milestones: updated });
+  };
+
+  const deleteMilestone = (ms) => {
+    if (ms.status === 'paid') return;
+    if (window.confirm(`Delete milestone "${ms.name}"?`)) {
+      onUpdateProject({ ...project, milestones: milestones.filter(m => m.id !== ms.id) });
+    }
+  };
+
   React.useEffect(() => {
     setSummaryText(project.summary || '');
   }, [project.summary]);
@@ -546,6 +590,18 @@ export default function ProjectDetail({
             Change Orders ({project.changeOrders.length})
           </button>
 
+          <button
+            className={`btn btn-secondary`}
+            style={{
+              borderBottom: activeTab === 'milestones' ? '2px solid var(--accent)' : 'none',
+              backgroundColor: activeTab === 'milestones' ? 'var(--bg-secondary)' : 'transparent',
+              borderColor: 'transparent'
+            }}
+            onClick={() => setActiveTab('milestones')}
+          >
+            Milestones ({milestones.length})
+          </button>
+
           <button 
             className={`btn btn-secondary`}
             style={{ 
@@ -650,6 +706,83 @@ export default function ProjectDetail({
               </div>
 
             </div>
+          </div>
+        )}
+
+        {/* TAB: PAYMENT MILESTONES (client portal) */}
+        {activeTab === 'milestones' && (
+          <div className="panel">
+            <div className="panel-header">
+              <h2 className="panel-title">Payment Milestones</h2>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                Paid {formatCurrency(milestones.filter(m => m.status === 'paid').reduce((s, m) => s + (Number(m.amount) || 0), 0))}
+                {' · '}
+                Remaining {formatCurrency(milestones.filter(m => m.status !== 'paid').reduce((s, m) => s + (Number(m.amount) || 0), 0))}
+              </div>
+            </div>
+
+            <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+              Milestones appear in the client's portal with a "Pay now" button (requires a Stripe key in Settings).
+              Payments made through the portal are verified with Stripe and marked paid automatically.
+            </p>
+
+            <form onSubmit={handleAddMilestone} style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '20px', alignItems: 'flex-end' }}>
+              <div className="form-group" style={{ flex: 2, minWidth: '180px', marginBottom: 0 }}>
+                <label className="form-label">Milestone</label>
+                <input type="text" className="input-field" placeholder="e.g. 50% deposit to begin work" value={msName} onChange={(e) => setMsName(e.target.value)} required />
+              </div>
+              <div className="form-group" style={{ flex: 3, minWidth: '200px', marginBottom: 0 }}>
+                <label className="form-label">Description (optional)</label>
+                <input type="text" className="input-field" placeholder="What this payment covers" value={msDesc} onChange={(e) => setMsDesc(e.target.value)} />
+              </div>
+              <div className="form-group" style={{ width: '130px', marginBottom: 0 }}>
+                <label className="form-label">Amount ($)</label>
+                <input type="number" min="0.5" step="0.01" className="input-field" placeholder="0.00" value={msAmount} onChange={(e) => setMsAmount(e.target.value)} required />
+              </div>
+              <button type="submit" className="btn btn-primary"><Plus size={14} /> Add</button>
+            </form>
+
+            {milestones.length === 0 ? (
+              <div style={{ padding: '32px', textAlign: 'center', color: 'var(--text-secondary)', border: '1px dashed var(--border-color)' }}>
+                No milestones yet. Break the contract into payment stages (deposit, rough-in complete, final walkthrough…)
+                and the client can pay each one online.
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {milestones.map(ms => (
+                  <div key={ms.id} style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '12px 16px', border: '1px solid var(--border-color)', backgroundColor: 'var(--bg-primary)' }}>
+                    <button
+                      onClick={() => toggleMilestonePaid(ms)}
+                      title={ms.stripeSessionId ? 'Paid via Stripe — locked' : (ms.status === 'paid' ? 'Mark as unpaid' : 'Mark as paid (manual/offline payment)')}
+                      style={{ background: 'none', border: 'none', cursor: ms.stripeSessionId ? 'default' : 'pointer', padding: 0, display: 'flex' }}
+                    >
+                      {ms.status === 'paid'
+                        ? <CheckSquare size={18} style={{ color: 'var(--success, #38a169)' }} />
+                        : <Square size={18} style={{ color: 'var(--text-muted)' }} />}
+                    </button>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600, fontSize: '14px' }}>{ms.name}</div>
+                      {ms.description && <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{ms.description}</div>}
+                      {ms.status === 'paid' && (
+                        <div style={{ fontSize: '11px', color: 'var(--success, #38a169)' }}>
+                          Paid {ms.paidAt ? new Date(ms.paidAt).toLocaleString() : ''} {ms.stripeSessionId ? '· via Stripe' : '· marked manually'}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{formatCurrency(Number(ms.amount) || 0)}</div>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      style={{ padding: '4px 8px', opacity: ms.status === 'paid' ? 0.4 : 1 }}
+                      onClick={() => deleteMilestone(ms)}
+                      disabled={ms.status === 'paid'}
+                      title={ms.status === 'paid' ? 'Paid milestones cannot be deleted' : 'Delete milestone'}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 

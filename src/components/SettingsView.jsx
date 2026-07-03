@@ -50,6 +50,10 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
   const [tavilyKey, setTavilyKey] = useState(settings.tavilyKey || '');
   const [braveSearchKey, setBraveSearchKey] = useState(settings.braveSearchKey || '');
   const [stripeKey, setStripeKey] = useState(settings.stripeKey || '');
+  const [portalUrl, setPortalUrl] = useState(settings.portalUrl || '');
+  const [portalSyncKey, setPortalSyncKey] = useState('');
+  const [portalSyncStatus, setPortalSyncStatus] = useState('');
+  const [portalSyncing, setPortalSyncing] = useState(false);
   const [team, setTeam] = useState(Array.isArray(settings.team) ? settings.team : []);
   const [newMemberName, setNewMemberName] = useState('');
   const [newMemberEmail, setNewMemberEmail] = useState('');
@@ -249,6 +253,8 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
       tavilyKey,
       braveSearchKey,
       stripeKey,
+      portalUrl,
+      portalSyncKey,
       theme,
       spacingScale: parseFloat(spacingScale) || 1.0,
       fontScale: parseFloat(fontScale) || 1.0,
@@ -275,7 +281,9 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
         tavilyKey: '',
         braveSearchKey: '',
         stripeKey: '',
+        portalSyncKey: '',
       });
+      setPortalSyncKey('');
       setSaveSuccess(true);
       playSuccess();
       setTimeout(() => setSaveSuccess(false), 3000);
@@ -1058,6 +1066,72 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
                 value={braveSearchKey}
                 onChange={(e) => setBraveSearchKey(e.target.value)}
               />
+            </div>
+          </div>
+
+          {/* Card 7b: Cloud Client Portal */}
+          <div className="panel" style={{ marginBottom: 0 }}>
+            <div className="panel-header">
+              <h2 className="panel-title">Cloud Client Portal</h2>
+            </div>
+            <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+              The always-on customer portal (Railway). This computer pushes portal-enabled
+              clients and their projects up, and pulls client messages and payments back —
+              every 2 minutes automatically, or on demand below.
+            </p>
+
+            <div className="form-group">
+              <label className="form-label">Portal URL</label>
+              <input
+                type="text"
+                className="input-field"
+                placeholder="https://your-portal.up.railway.app"
+                value={portalUrl}
+                onChange={(e) => setPortalUrl(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Portal Sync Secret</label>
+              <input
+                type="password"
+                className="input-field"
+                placeholder={settings.portalSyncConfigured ? 'Configured on hosting computer' : 'Paste the SYNC_SECRET set on the portal'}
+                value={portalSyncKey}
+                onChange={(e) => setPortalSyncKey(e.target.value)}
+              />
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={portalSyncing}
+                onClick={async () => {
+                  setPortalSyncing(true);
+                  setPortalSyncStatus('Syncing…');
+                  try {
+                    const res = await fetch('/api/portal-sync', { method: 'POST' });
+                    const data = await res.json();
+                    if (data.configured === false) {
+                      setPortalSyncStatus('Save the Portal URL and Sync Secret first.');
+                    } else if (!res.ok || data.ok === false) {
+                      setPortalSyncStatus(`Sync failed: ${data.error || res.status}`);
+                    } else {
+                      setPortalSyncStatus(`Synced — ${data.publishedProjects} project(s) published, ${data.newMessages} new message(s), ${data.newPayments} payment(s).`);
+                    }
+                  } catch (error) {
+                    setPortalSyncStatus(`Sync failed: ${error.message}`);
+                  } finally {
+                    setPortalSyncing(false);
+                  }
+                }}
+              >
+                Sync Now
+              </button>
+              {portalSyncStatus && (
+                <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{portalSyncStatus}</span>
+              )}
             </div>
           </div>
 
