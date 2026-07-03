@@ -34,6 +34,10 @@ const STRIPE_KEY = (process.env.STRIPE_SECRET_KEY || '').trim()
 const OPENROUTER_KEY = (process.env.OPENROUTER_API_KEY || '').trim()
 const AI_MODEL = (process.env.PORTAL_AI_MODEL || '').trim()
 const CHAT_LIMIT_PER_HOUR = Number(process.env.CHAT_LIMIT_PER_HOUR) || 20
+// Public (not-signed-in) assistant limits: per-visitor hourly, plus a global
+// daily ceiling that protects the OpenRouter budget from abuse.
+const PUBLIC_CHAT_LIMIT_PER_HOUR = Number(process.env.PUBLIC_CHAT_LIMIT_PER_HOUR) || 15
+const PUBLIC_CHAT_DAILY_GLOBAL = Number(process.env.PUBLIC_CHAT_DAILY_GLOBAL) || 300
 const GOOGLE_CLIENT_ID = (process.env.GOOGLE_CLIENT_ID || '').trim()
 const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null
 
@@ -150,7 +154,67 @@ app.get('/api/public/site', (_req, res) => {
     },
     catalog: getCatalog(),
     posts: getPosts(),
+    assistantEnabled: Boolean(OPENROUTER_KEY && AI_MODEL),
   })
+})
+
+// Public service-matching assistant: visitors describe a problem, it points
+// them at the right services from the live catalog and toward a quote request.
+let publicChatDay = ''
+let publicChatCount = 0
+
+app.post('/api/public/chat', async (req, res) => {
+  if (!OPENROUTER_KEY || !AI_MODEL) {
+    res.status(400).json({ error: 'The assistant is not available right now.' })
+    return
+  }
+  const today = new Date().toISOString().slice(0, 10)
+  if (publicChatDay !== today) {
+    publicChatDay = today
+    publicChatCount = 0
+  }
+  if (publicChatCount >= PUBLIC_CHAT_DAILY_GLOBAL) {
+    res.status(429).json({ error: 'The assistant is taking a break for today — please use the quote request form and we will get right back to you.' })
+    return
+  }
+  if (limited(`pubchat:${req.ip}`, PUBLIC_CHAT_LIMIT_PER_HOUR, 60 * 60 * 1000)) {
+    res.status(429).json({ error: 'You have reached the assistant limit for now. Send us a quote request instead — a real person answers those.' })
+    return
+  }
+  publicChatCount += 1
+
+  const history = (Array.isArray(req.body?.messages) ? req.body.messages : [])
+    .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+    .slice(-12)
+    .map((m) => ({ role: m.role, content: m.content.slice(0, 2000) }))
+
+  const business = getBusiness()
+  const catalogContext = getCatalog().map(({ id: _id, ...rest }) => rest)
+  const system = [
+    `You are the friendly service advisor on the public website of ${business.companyName || "Travis's Creations"}.`,
+    business.businessDescription ? `About the business: ${business.businessDescription}` : '',
+    `The live service catalog (JSON): ${JSON.stringify(catalogContext)}`,
+    'Visitors describe a problem or project. Your job: figure out what they actually need, then recommend the specific matching services from the catalog BY NAME, with their starting rates, and briefly explain why they fit. If several could apply, ask one clarifying question rather than listing everything.',
+    'Rates in the catalog are starting points ("from" prices) — every job gets a written quote. Never invent services, prices, discounts, or availability that are not in the catalog.',
+    'You cannot book work, make commitments, or negotiate. Once you know what they need, tell them to add those services to a quote request using the "Add to quote request" buttons in the catalog, fill in the form below it, and the team will follow up with a real quote.',
+    'Be warm, plain-spoken, and concise — a couple of short paragraphs at most. Never discuss anything unrelated to this business and its services.',
+  ].filter(Boolean).join('\n\n')
+
+  try {
+    const orRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${OPENROUTER_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: AI_MODEL, messages: [{ role: 'system', content: system }, ...history] }),
+    })
+    const data = await orRes.json().catch(() => ({}))
+    if (!orRes.ok) {
+      res.status(502).json({ error: data.error?.message || 'The assistant is temporarily unavailable.' })
+      return
+    }
+    res.json({ reply: data.choices?.[0]?.message?.content || '' })
+  } catch (error) {
+    res.status(502).json({ error: `Assistant error: ${error.message}` })
+  }
 })
 
 app.post('/api/public/lead', (req, res) => {

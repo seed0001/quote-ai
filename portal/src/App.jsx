@@ -119,6 +119,87 @@ function PostCard({ post, full = false }) {
   )
 }
 
+function AdvisorWidget() {
+  const [open, setOpen] = useState(false)
+  const [history, setHistory] = useState([])
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState(false)
+  const endRef = useRef(null)
+
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [history.length, busy, open])
+
+  const send = async (event) => {
+    event.preventDefault()
+    const text = draft.trim()
+    if (!text || busy) return
+    const next = [...history, { role: 'user', content: text }]
+    setHistory(next)
+    setDraft('')
+    setBusy(true)
+    try {
+      const response = await fetch('/api/public/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: next }),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'The assistant is unavailable.')
+      setHistory((current) => [...current, { role: 'assistant', content: data.reply }])
+    } catch (error) {
+      setHistory((current) => [...current, { role: 'assistant', content: error.message, error: true }])
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      {open && (
+        <div className="advisor-panel">
+          <div className="advisor-panel__head">
+            <span><Sparkles size={17} /></span>
+            <div>
+              <strong>Service advisor</strong>
+              <small>Describe your problem — I'll point you at the right services.</small>
+            </div>
+            <button onClick={() => setOpen(false)} aria-label="Close assistant"><X size={17} /></button>
+          </div>
+          <div className="advisor-panel__body">
+            {history.length === 0 && (
+              <div className="advisor-empty">
+                <p>"My brakes are squealing" · "I want to remodel my bathroom" · "My PC won't boot"</p>
+                <p>Tell me what's going on and I'll match it to what we do.</p>
+              </div>
+            )}
+            {history.map((message, index) => (
+              <div key={index} className={`advisor-msg advisor-msg--${message.role}${message.error ? ' advisor-msg--error' : ''}`}>
+                {message.content}
+              </div>
+            ))}
+            {busy && <div className="advisor-msg advisor-msg--assistant advisor-typing">Thinking…</div>}
+            <div ref={endRef} />
+          </div>
+          <form className="advisor-panel__composer" onSubmit={send}>
+            <input
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              placeholder="What do you need help with?"
+              maxLength={2000}
+              disabled={busy}
+            />
+            <button type="submit" disabled={busy || !draft.trim()} aria-label="Send"><Send size={16} /></button>
+          </form>
+          <div className="advisor-panel__foot">AI assistant — for booking or firm pricing, send a quote request.</div>
+        </div>
+      )}
+      <button className="advisor-fab" onClick={() => setOpen((value) => !value)} aria-label="Chat with our service advisor">
+        {open ? <X size={22} /> : <Sparkles size={22} />}
+        {!open && <span>Need help choosing?</span>}
+      </button>
+    </>
+  )
+}
+
 function PublicSite({ onSignIn }) {
   const [site, setSite] = useState(null)
   const [page, setPage] = useState('home')
@@ -445,6 +526,8 @@ function PublicSite({ onSignIn }) {
         <p>Craftsmanship meets practical technology.</p>
         <span>© {new Date().getFullYear()} {business.companyName || "Travis's Creations"}</span>
       </footer>
+
+      {site?.assistantEnabled && <AdvisorWidget />}
     </div>
   )
 }
