@@ -250,16 +250,19 @@ function parseJsonLoose(text) {
 }
 
 // One OpenRouter chat round-trip. Returns the raw assistant content string.
-async function postChat(messages, settings, jsonMode = true) {
+async function postChat(messages, settings, jsonMode = true, classifierModel) {
   // Only ever use models the user picked in Settings. If a message carries an
   // image and a dedicated vision model is set, use it; otherwise fall back to
   // the user's main model (which for most modern models handles images too).
   // No hardcoded model slugs anywhere — nothing can silently bill a model
   // nobody chose, and no dead default slug can break image requests.
   const hasImage = messages.some(m => Array.isArray(m.content) && m.content.some(c => c?.type === 'image_url'));
-  const targetModel = (hasImage && settings.openRouterVisionModel)
-    ? settings.openRouterVisionModel
-    : settings.openRouterModel;
+  let targetModel = settings.openRouterModel;
+  if (classifierModel) {
+    targetModel = classifierModel;
+  } else if (hasImage && settings.openRouterVisionModel) {
+    targetModel = settings.openRouterVisionModel;
+  }
   if (!targetModel) {
     throw new Error('No AI model is selected. Open System Settings and choose an OpenRouter model before using the assistant.');
   }
@@ -369,11 +372,7 @@ async function callOpenRouter({ systemPrompt, history, userMessage, settings, cl
 
     let chatResult;
     try {
-      const activeSettings = {
-        ...settings,
-        openRouterModel: activeClassifierModel || settings.openRouterModel
-      };
-      chatResult = await postChat(messages, activeSettings);
+      chatResult = await postChat(messages, settings, true, activeClassifierModel);
     } catch (err) {
       const modelToFallBack = activeClassifierModel || settings.openRouterModel;
       const isModelErr = err.message?.startsWith('MODEL_NOT_FOUND:') || err.message?.toLowerCase().includes('model');
