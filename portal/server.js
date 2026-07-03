@@ -33,6 +33,22 @@ const CHAT_LIMIT_PER_HOUR = Number(process.env.CHAT_LIMIT_PER_HOUR) || 20
 const GOOGLE_CLIENT_ID = (process.env.GOOGLE_CLIENT_ID || '').trim()
 const googleClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null
 
+// Bootstrap the administrator account from env so a fresh deploy is never
+// locked out. Set ADMIN_EMAIL + ADMIN_PASSWORD in Railway variables; the
+// password follows the variable, so changing it there resets the login.
+const ADMIN_EMAIL = (process.env.ADMIN_EMAIL || '').trim().toLowerCase()
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || ''
+if (ADMIN_EMAIL && ADMIN_PASSWORD) {
+  const existing = db.prepare('SELECT id FROM admins WHERE lower(email) = ?').get(ADMIN_EMAIL)
+  if (existing) {
+    db.prepare('UPDATE admins SET password_hash = ?, active = 1 WHERE id = ?')
+      .run(hashPassword(ADMIN_PASSWORD), existing.id)
+  } else {
+    db.prepare('INSERT INTO admins (id, email, name, password_hash, google_enabled, active, created_at) VALUES (?, ?, ?, ?, 1, 1, ?)')
+      .run(`adm-${Date.now()}`, ADMIN_EMAIL, process.env.ADMIN_NAME || 'Administrator', hashPassword(ADMIN_PASSWORD), new Date().toISOString())
+  }
+}
+
 const app = express()
 app.set('trust proxy', 1) // Railway/Cloudflare sit in front; needed for req.ip + secure cookies
 app.use(express.json({ limit: '12mb' }))
