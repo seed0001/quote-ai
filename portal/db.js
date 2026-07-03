@@ -104,7 +104,20 @@ db.exec(`
     admin_id TEXT NOT NULL,
     expires_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    type TEXT NOT NULL,               -- pageview | ai_chat | client_chat
+    visitor TEXT DEFAULT '',
+    path TEXT DEFAULT '',
+    meta TEXT DEFAULT '{}'
+  );
+  CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+  CREATE INDEX IF NOT EXISTS idx_events_type_ts ON events(type, ts);
 `)
+
+// Analytics events age out after 90 days so the volume stays bounded.
+db.prepare('DELETE FROM events WHERE ts < ?').run(new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString())
 
 // Older databases predate the quote-request items column — add it in place.
 const leadColumns = db.prepare('PRAGMA table_info(leads)').all().map((c) => c.name)
@@ -219,6 +232,75 @@ export const messagesForClient = (clientId) =>
 // ---- Public catalog (published by the hub) ---------------------------------
 export const getCatalog = () =>
   db.prepare('SELECT id, name, category, unit, price, description FROM catalog ORDER BY category COLLATE NOCASE, name COLLATE NOCASE').all()
+
+// ---- Analytics --------------------------------------------------------------
+export const recordEvent = (type, visitor = '', path = '', meta = {}) => {
+  db.prepare('INSERT INTO events (ts, type, visitor, path, meta) VALUES (?, ?, ?, ?, ?)')
+    .run(new Date().toISOString(), type, String(visitor).slice(0, 80), String(path).slice(0, 200), JSON.stringify(meta))
+}
+
+export const getAnalytics = (days = 30) => {
+  const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+
+  const daily = db.prepare(`
+    SELECT substr(ts, 1, 10) AS day, COUNT(*) AS views, COUNT(DISTINCT visitor) AS visitors
+    FROM events WHERE type = 'pageview' AND ts >= ?
+    GROUP BY day ORDER BY day
+  `).all(since)
+
+  const total = db.prepare(`
+    SELECT COUNT(*) AS views, COUNT(DISTINCT visitor) AS visitors
+    FROM events WHERE type = 'pageview' AND ts >= ?
+  `).get(since)
+
+  const ai = db.prepare(`
+    SELECT COUNT(*) AS messages, COUNT(DISTINCT visitor) AS users
+    FROM events WHERE type = 'ai_chat' AND ts >= ?
+  `).get(since)
+
+  const clientAi = db.prepare(`
+    SELECT COUNT(*) AS messages, COUNT(DISTINCT visitor) AS users
+    FROM events WHERE type = 'client_chat' AND ts >= ?
+  `).get(since)
+
+  const topPaths = db.prepare(`
+    SELECT path, COUNT(*) AS views FROM events
+    WHERE type = 'pageview' AND ts >= ?
+    GROUP BY path ORDER BY views DESC LIMIT 8
+  `).all(since)
+
+  const recentAiChats = db.prepare(`
+    SELECT ts, type, visitor, meta FROM events
+    WHERE type IN ('ai_chat', 'client_chat')
+    ORDER BY ts DESC LIMIT 40
+  `).all().map((row) => {
+    let meta = {}
+    try { meta = JSON.parse(row.meta) } catch { /* skip bad row */ }
+    return { ts: row.ts, type: row.type, visitor: row.visitor, text: meta.text || '' }
+  })
+
+  const leads = db.prepare('SELECT COUNT(*) AS n FROM leads WHERE created_at >= ?').get(since)
+  const clientMessages = db.prepare("SELECT COUNT(*) AS n FROM messages WHERE sender = 'client' AND created_at >= ?").get(since)
+  const payments = db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total FROM payments').get()
+
+  return {
+    days,
+    daily,
+    totals: {
+      views: total.views,
+      visitors: total.visitors,
+      aiMessages: ai.messages,
+      aiUsers: ai.users,
+      clientAiMessages: clientAi.messages,
+      quoteRequests: leads.n,
+      clientMessages: clientMessages.n,
+      paymentsCount: payments.n,
+      paymentsTotal: payments.total,
+    },
+    topPaths,
+    recentAiChats,
+  }
+}
 
 // ---- Website posts (published by the hub) ----------------------------------
 export const getPosts = () =>

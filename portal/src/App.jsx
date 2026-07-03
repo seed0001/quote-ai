@@ -61,6 +61,28 @@ const POST_TAGS = {
 const bootPaidSession = new URLSearchParams(window.location.search).get('paid_session') || ''
 if (bootPaidSession) window.history.replaceState(null, '', '/')
 
+// Anonymous visitor id for analytics — no cookies, just localStorage.
+const visitorId = () => {
+  try {
+    let value = localStorage.getItem('tc_visitor')
+    if (!value) {
+      value = `v-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
+      localStorage.setItem('tc_visitor', value)
+    }
+    return value
+  } catch {
+    return 'v-anon'
+  }
+}
+
+const trackPageview = (path) => {
+  fetch('/api/track', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'pageview', path, visitor: visitorId() }),
+  }).catch(() => {})
+}
+
 // Custom mark: a hex nut (automotive/hardware) holding a roofline (home)
 // whose post branches into circuit nodes (technology) — the three trades.
 function LogoMark({ size = 24 }) {
@@ -139,7 +161,7 @@ function AdvisorWidget() {
     try {
       const response = await fetch('/api/public/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-visitor': visitorId() },
         body: JSON.stringify({ messages: next }),
       })
       const data = await response.json()
@@ -220,6 +242,10 @@ function PublicSite({ onSignIn }) {
   const catalog = site?.catalog || []
   const posts = site?.posts || []
   const categories = [...new Set(catalog.map((item) => item.category || 'Services'))]
+
+  useEffect(() => {
+    trackPageview(page === 'workshop' ? '/workshop' : '/')
+  }, [page])
 
   // Nav works from both pages: jump home first if needed, then scroll.
   const goAnchor = (id) => {
@@ -615,8 +641,199 @@ function Login({ email, setEmail, password, setPassword, error, busy, onSubmit, 
   )
 }
 
+function AdminAnalytics() {
+  const [data, setData] = useState(null)
+  const [days, setDays] = useState(30)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    fetch(`/api/admin/analytics?days=${days}`, { cache: 'no-store' })
+      .then((response) => response.json())
+      .then((payload) => payload.error ? setError(payload.error) : setData(payload))
+      .catch((err) => setError(err.message))
+  }, [days])
+
+  if (error) return <div className="admin-empty">Analytics unavailable: {error}</div>
+  if (!data) return <div className="admin-empty">Loading analytics…</div>
+
+  const chartDays = [...Array(14)].map((_, index) => {
+    const day = new Date(Date.now() - (13 - index) * 864e5).toISOString().slice(0, 10)
+    const row = data.daily.find((entry) => entry.day === day)
+    return { day, views: row?.views || 0, visitors: row?.visitors || 0 }
+  })
+  const maxViews = Math.max(...chartDays.map((entry) => entry.views), 1)
+  const t = data.totals
+
+  return (
+    <>
+      <section className="admin-welcome">
+        <div>
+          <span className="eyebrow">Site analytics</span>
+          <h1>How the site is doing</h1>
+          <p>Traffic, quote requests, and AI conversations — updated live.</p>
+        </div>
+        <select className="analytics-range" value={days} onChange={(event) => setDays(Number(event.target.value))}>
+          <option value={7}>Last 7 days</option>
+          <option value={30}>Last 30 days</option>
+          <option value={90}>Last 90 days</option>
+        </select>
+      </section>
+
+      <section className="admin-stats">
+        <div><span><Users size={20} /></span><small>Unique visitors</small><strong>{t.visitors}</strong></div>
+        <div><span><Home size={20} /></span><small>Page views</small><strong>{t.views}</strong></div>
+        <div><span><Send size={20} /></span><small>Quote requests</small><strong>{t.quoteRequests}</strong></div>
+        <div><span><Sparkles size={20} /></span><small>AI chats ({t.aiUsers} visitors)</small><strong>{t.aiMessages}</strong></div>
+        <div><span><MessageCircle size={20} /></span><small>Client messages</small><strong>{t.clientMessages}</strong></div>
+        <div><span><CreditCard size={20} /></span><small>Payments (all time)</small><strong>{formatCurrency(t.paymentsTotal)}</strong></div>
+      </section>
+
+      <section className="admin-panel">
+        <div className="admin-panel__head"><div><span className="eyebrow">Last 14 days</span><h2>Daily traffic</h2></div></div>
+        <div className="analytics-bars">
+          {chartDays.map((entry) => (
+            <div className="analytics-bars__col" key={entry.day} title={`${entry.day}: ${entry.views} views, ${entry.visitors} visitors`}>
+              <span className="analytics-bars__count">{entry.views || ''}</span>
+              <div className="analytics-bars__bar" style={{ height: `${Math.max((entry.views / maxViews) * 100, 2)}%` }} />
+              <small>{entry.day.slice(5)}</small>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <div className="admin-grid">
+        <section className="admin-panel">
+          <div className="admin-panel__head"><div><span className="eyebrow">Where people go</span><h2>Top pages</h2></div></div>
+          {data.topPaths.length ? (
+            <div className="analytics-paths">
+              {data.topPaths.map((row) => (
+                <div key={row.path}>
+                  <span>{row.path === '/' ? 'Home' : row.path === '/workshop' ? 'Workshop' : row.path === '/portal' ? 'Client portal' : row.path === '/signin' ? 'Sign in' : row.path}</span>
+                  <div className="analytics-paths__track"><span style={{ width: `${(row.views / data.topPaths[0].views) * 100}%` }} /></div>
+                  <b>{row.views}</b>
+                </div>
+              ))}
+            </div>
+          ) : <div className="admin-empty">No traffic recorded yet.</div>}
+        </section>
+
+        <section className="admin-panel">
+          <div className="admin-panel__head"><div><span className="eyebrow">What people ask the AI</span><h2>Recent conversations</h2></div></div>
+          {data.recentAiChats.length ? (
+            <div className="admin-message-list">
+              {data.recentAiChats.slice(0, 12).map((chat, index) => (
+                <div key={index}>
+                  <span>{chat.type === 'client_chat' ? `Client: ${chat.visitor}` : `Visitor ${String(chat.visitor).slice(0, 10)}`}</span>
+                  <p>{chat.text || '(empty message)'}</p>
+                  <small>{formatDate(chat.ts, true)}</small>
+                </div>
+              ))}
+            </div>
+          ) : <div className="admin-empty">No AI conversations yet.</div>}
+        </section>
+      </div>
+    </>
+  )
+}
+
+function AdminAiSettings() {
+  const [form, setForm] = useState(null)
+  const [status, setStatus] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/admin/ai-settings', { cache: 'no-store' })
+      .then((response) => response.json())
+      .then(setForm)
+      .catch(() => setStatus('Unable to load AI settings.'))
+  }, [])
+
+  if (!form) return <div className="admin-empty">{status || 'Loading AI settings…'}</div>
+
+  const setField = (field) => (event) => setForm((current) => ({ ...current, [field]: event.target.value }))
+
+  const save = async (event) => {
+    event.preventDefault()
+    setSaving(true)
+    setStatus('')
+    try {
+      const response = await fetch('/api/admin/ai-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Save failed.')
+      setStatus(`Saved — the assistant now runs ${data.effectiveModel} with your settings. Takes effect immediately.`)
+    } catch (err) {
+      setStatus(`Save failed: ${err.message}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <>
+      <section className="admin-welcome">
+        <div>
+          <span className="eyebrow">Assistant configuration</span>
+          <h1>AI settings</h1>
+          <p>Model, personality, and usage limits for both the public advisor and the client assistant. Changes apply instantly — no redeploy.</p>
+        </div>
+        <span className="admin-secure"><ShieldCheck size={18} /> {form.keyConfigured ? 'OpenRouter key connected' : 'No OpenRouter key set'}</span>
+      </section>
+
+      <form className="admin-panel ai-settings" onSubmit={save}>
+        <label>
+          <span>Model</span>
+          <input
+            value={form.model}
+            onChange={setField('model')}
+            placeholder={`Using ${form.effectiveModel || form.envModel || 'none'} — enter an OpenRouter model id to override`}
+          />
+          <small>Any OpenRouter model id, e.g. google/gemini-2.5-flash or anthropic/claude-haiku-4.5. Leave blank to use the Railway variable ({form.envModel || 'not set'}).</small>
+        </label>
+
+        <label>
+          <span>Persona statement</span>
+          <textarea
+            rows={5}
+            value={form.persona}
+            onChange={setField('persona')}
+            placeholder="e.g., You speak like Travis: friendly, direct, Oklahoma-plain. No corporate fluff. You love solving practical problems and always look for the simplest fix that lasts."
+          />
+          <small>Sets the assistant's voice on both the public site and the client portal.</small>
+        </label>
+
+        <div className="ai-settings__limits">
+          <label>
+            <span>Public: messages / visitor / hour</span>
+            <input type="number" min="1" max="500" value={form.publicHourly} onChange={setField('publicHourly')} />
+          </label>
+          <label>
+            <span>Public: total messages / day</span>
+            <input type="number" min="1" max="20000" value={form.publicDaily} onChange={setField('publicDaily')} />
+          </label>
+          <label>
+            <span>Clients: messages / hour</span>
+            <input type="number" min="1" max="500" value={form.clientHourly} onChange={setField('clientHourly')} />
+          </label>
+        </div>
+
+        <div className="ai-settings__actions">
+          <button className="primary-action" type="submit" disabled={saving} style={{ width: 'auto', minHeight: '44px', padding: '0 22px' }}>
+            {saving ? <LoaderCircle className="spin" size={17} /> : 'Save AI settings'}
+          </button>
+          {status && <span className="ai-settings__status">{status}</span>}
+        </div>
+      </form>
+    </>
+  )
+}
+
 function AdminPortal({ session, onLogout }) {
   const { admin, business, stats, clients, projects, recentMessages } = session
+  const [tab, setTab] = useState('overview')
   return (
     <div className="admin-shell">
       <header className="admin-header">
@@ -628,6 +845,15 @@ function AdminPortal({ session, onLogout }) {
         </div>
       </header>
 
+      <nav className="admin-tabs">
+        <button className={tab === 'overview' ? 'active' : ''} onClick={() => setTab('overview')}><Home size={15} /> Overview</button>
+        <button className={tab === 'analytics' ? 'active' : ''} onClick={() => setTab('analytics')}><Clock3 size={15} /> Analytics</button>
+        <button className={tab === 'ai' ? 'active' : ''} onClick={() => setTab('ai')}><Sparkles size={15} /> AI settings</button>
+      </nav>
+
+      {tab === 'analytics' && <main className="admin-main"><AdminAnalytics /></main>}
+      {tab === 'ai' && <main className="admin-main"><AdminAiSettings /></main>}
+      {tab === 'overview' && (
       <main className="admin-main">
         <section className="admin-welcome">
           <div><span className="eyebrow">Business command center</span><h1>{business.companyName || "Travis's Creations"}</h1><p>Customer portal activity, project visibility, and client communication at a glance.</p></div>
@@ -690,6 +916,7 @@ function AdminPortal({ session, onLogout }) {
           ) : <div className="admin-empty">No projects have been published to the portal yet.</div>}
         </section>
       </main>
+      )}
     </div>
   )
 }

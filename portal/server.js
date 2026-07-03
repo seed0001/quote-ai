@@ -23,6 +23,8 @@ import {
   replaceCatalog,
   getPosts,
   replacePosts,
+  recordEvent,
+  getAnalytics,
 } from './db.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -129,6 +131,29 @@ const requireClient = (req, res, next) => {
   next()
 }
 
+const requireAdmin = (req, res, next) => {
+  const admin = sessionAdmin(readCookie(req, 'portal_admin_session'))
+  if (!admin) {
+    res.status(401).json({ error: 'Administrator sign-in required.' })
+    return
+  }
+  req.admin = admin
+  next()
+}
+
+// AI behavior is DB-backed (editable from the admin page) with env fallbacks,
+// so changing the model or persona never needs a redeploy.
+const aiConfig = () => {
+  const business = getBusiness()
+  return {
+    model: String(business.aiModel || AI_MODEL).trim(),
+    persona: String(business.aiPersona || '').trim(),
+    publicHourly: Number(business.publicChatHourly) || PUBLIC_CHAT_LIMIT_PER_HOUR,
+    publicDaily: Number(business.publicChatDaily) || PUBLIC_CHAT_DAILY_GLOBAL,
+    clientHourly: Number(business.clientChatHourly) || CHAT_LIMIT_PER_HOUR,
+  }
+}
+
 const requireSync = (req, res, next) => {
   const auth = req.headers.authorization || ''
   const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : ''
@@ -154,8 +179,25 @@ app.get('/api/public/site', (_req, res) => {
     },
     catalog: getCatalog(),
     posts: getPosts(),
-    assistantEnabled: Boolean(OPENROUTER_KEY && AI_MODEL),
+    assistantEnabled: Boolean(OPENROUTER_KEY && aiConfig().model),
   })
+})
+
+// Lightweight anonymous analytics beacon (no cookies, localStorage id only).
+app.post('/api/track', (req, res) => {
+  if (limited(`track:${req.ip}`, 120, 60 * 60 * 1000)) {
+    res.json({ ok: true })
+    return
+  }
+  const type = String(req.body?.type || '')
+  if (type !== 'pageview') {
+    res.status(400).json({ error: 'Unknown event type.' })
+    return
+  }
+  const visitor = String(req.body?.visitor || req.ip).slice(0, 80)
+  const path = String(req.body?.path || '/').slice(0, 200)
+  recordEvent('pageview', visitor, path)
+  res.json({ ok: true })
 })
 
 // Public service-matching assistant: visitors describe a problem, it points
@@ -164,7 +206,8 @@ let publicChatDay = ''
 let publicChatCount = 0
 
 app.post('/api/public/chat', async (req, res) => {
-  if (!OPENROUTER_KEY || !AI_MODEL) {
+  const ai = aiConfig()
+  if (!OPENROUTER_KEY || !ai.model) {
     res.status(400).json({ error: 'The assistant is not available right now.' })
     return
   }
@@ -173,11 +216,11 @@ app.post('/api/public/chat', async (req, res) => {
     publicChatDay = today
     publicChatCount = 0
   }
-  if (publicChatCount >= PUBLIC_CHAT_DAILY_GLOBAL) {
+  if (publicChatCount >= ai.publicDaily) {
     res.status(429).json({ error: 'The assistant is taking a break for today — please use the quote request form and we will get right back to you.' })
     return
   }
-  if (limited(`pubchat:${req.ip}`, PUBLIC_CHAT_LIMIT_PER_HOUR, 60 * 60 * 1000)) {
+  if (limited(`pubchat:${req.ip}`, ai.publicHourly, 60 * 60 * 1000)) {
     res.status(429).json({ error: 'You have reached the assistant limit for now. Send us a quote request instead — a real person answers those.' })
     return
   }
@@ -188,10 +231,14 @@ app.post('/api/public/chat', async (req, res) => {
     .slice(-12)
     .map((m) => ({ role: m.role, content: m.content.slice(0, 2000) }))
 
+  const lastUserText = [...history].reverse().find((m) => m.role === 'user')?.content || ''
+  recordEvent('ai_chat', String(req.headers['x-visitor'] || req.ip).slice(0, 80), '/', { text: lastUserText.slice(0, 300) })
+
   const business = getBusiness()
   const catalogContext = getCatalog().map(({ id: _id, ...rest }) => rest)
   const system = [
     `You are the friendly service advisor on the public website of ${business.companyName || "Travis's Creations"}.`,
+    ai.persona ? `Personality & voice (set by the owner — follow it): ${ai.persona}` : '',
     business.businessDescription ? `About the business: ${business.businessDescription}` : '',
     `The live service catalog (JSON): ${JSON.stringify(catalogContext)}`,
     'Visitors describe a problem or project. Your job: figure out what they actually need, then recommend the specific matching services from the catalog BY NAME, with their starting rates, and briefly explain why they fit. If several could apply, ask one clarifying question rather than listing everything.',
@@ -204,7 +251,7 @@ app.post('/api/public/chat', async (req, res) => {
     const orRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${OPENROUTER_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: AI_MODEL, messages: [{ role: 'system', content: system }, ...history] }),
+      body: JSON.stringify({ model: ai.model, messages: [{ role: 'system', content: system }, ...history] }),
     })
     const data = await orRes.json().catch(() => ({}))
     if (!orRes.ok) {
@@ -377,9 +424,48 @@ app.get('/api/session', (req, res) => {
     },
     projects: projectsForClient(client.id),
     messages: messagesForClient(client.id),
-    aiEnabled: Boolean(OPENROUTER_KEY && AI_MODEL),
+    aiEnabled: Boolean(OPENROUTER_KEY && aiConfig().model),
     paymentsEnabled: Boolean(STRIPE_KEY),
   })
+})
+
+// ============================================================================
+// ADMIN API (admin session required)
+// ============================================================================
+app.get('/api/admin/ai-settings', requireAdmin, (_req, res) => {
+  const ai = aiConfig()
+  res.json({
+    model: getBusiness().aiModel || '',
+    envModel: AI_MODEL,
+    effectiveModel: ai.model,
+    persona: ai.persona,
+    publicHourly: ai.publicHourly,
+    publicDaily: ai.publicDaily,
+    clientHourly: ai.clientHourly,
+    keyConfigured: Boolean(OPENROUTER_KEY),
+  })
+})
+
+app.put('/api/admin/ai-settings', requireAdmin, (req, res) => {
+  const body = req.body || {}
+  const clampLimit = (value, fallback, max) => {
+    const n = Math.round(Number(value))
+    return Number.isFinite(n) && n >= 1 && n <= max ? n : fallback
+  }
+  setBusiness({
+    aiModel: String(body.model || '').trim().slice(0, 120),
+    aiPersona: String(body.persona || '').trim().slice(0, 2000),
+    publicChatHourly: clampLimit(body.publicHourly, PUBLIC_CHAT_LIMIT_PER_HOUR, 500),
+    publicChatDaily: clampLimit(body.publicDaily, PUBLIC_CHAT_DAILY_GLOBAL, 20000),
+    clientChatHourly: clampLimit(body.clientHourly, CHAT_LIMIT_PER_HOUR, 500),
+  })
+  const ai = aiConfig()
+  res.json({ ok: true, effectiveModel: ai.model, persona: ai.persona, publicHourly: ai.publicHourly, publicDaily: ai.publicDaily, clientHourly: ai.clientHourly })
+})
+
+app.get('/api/admin/analytics', requireAdmin, (req, res) => {
+  const days = Math.min(Math.max(Number(req.query.days) || 30, 7), 90)
+  res.json(getAnalytics(days))
 })
 
 app.get('/api/messages', requireClient, (req, res) => {
@@ -406,11 +492,12 @@ app.post('/api/messages', requireClient, (req, res) => {
 
 // AI chat — the portal talks to OpenRouter directly with its own key.
 app.post('/api/chat', requireClient, async (req, res) => {
-  if (!OPENROUTER_KEY || !AI_MODEL) {
+  const ai = aiConfig()
+  if (!OPENROUTER_KEY || !ai.model) {
     res.status(400).json({ error: 'The assistant is not available right now.' })
     return
   }
-  if (limited(`chat:${req.client.id}`, CHAT_LIMIT_PER_HOUR, 60 * 60 * 1000)) {
+  if (limited(`chat:${req.client.id}`, ai.clientHourly, 60 * 60 * 1000)) {
     res.status(429).json({ error: 'You have reached the assistant limit for this hour. Please try again later, or send us a message instead.' })
     return
   }
@@ -420,11 +507,15 @@ app.post('/api/chat', requireClient, async (req, res) => {
     .slice(-16)
     .map((m) => ({ role: m.role, content: m.content.slice(0, 4000) }))
 
+  const lastUserText = [...history].reverse().find((m) => m.role === 'user')?.content || ''
+  recordEvent('client_chat', req.client.name || req.client.id, '/portal', { text: lastUserText.slice(0, 300) })
+
   const business = getBusiness()
   // Photos are large data URLs — keep them out of the prompt.
   const projectContext = projectsForClient(req.client.id).map(({ photos: _photos, ...rest }) => rest)
   const system = [
     `You are the client-facing assistant for ${business.companyName || 'our company'}.`,
+    ai.persona ? `Personality & voice (set by the owner — follow it): ${ai.persona}` : '',
     `You are chatting with ${req.client.name}${req.client.company ? ` (${req.client.company})` : ''}, one of our clients, inside their secure client portal.`,
     business.businessDescription ? `About the business: ${business.businessDescription}` : '',
     `The client's current project data (JSON): ${JSON.stringify(projectContext)}`,
@@ -436,7 +527,7 @@ app.post('/api/chat', requireClient, async (req, res) => {
     const orRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: { Authorization: `Bearer ${OPENROUTER_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: AI_MODEL, messages: [{ role: 'system', content: system }, ...history] }),
+      body: JSON.stringify({ model: ai.model, messages: [{ role: 'system', content: system }, ...history] }),
     })
     const data = await orRes.json().catch(() => ({}))
     if (!orRes.ok) {
