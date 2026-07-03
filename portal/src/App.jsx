@@ -59,6 +59,29 @@ const POST_TAGS = {
   news: 'News',
 }
 
+const CATEGORY_IMAGES = {
+  'AI Services': '/category-images/ai-services.jpg',
+  'Appliance Repair & Install': '/category-images/appliance-repair-install.jpg',
+  Automotive: '/category-images/automotive.jpg',
+  'Carpentry & Framing': '/category-images/carpentry-framing.jpg',
+  'Cleanup & Haul-Away': '/category-images/cleanup-haul-away.jpg',
+  'Custom AI Tools & Persona Bots': '/category-images/custom-ai-tools-persona-bots.jpg',
+  Discounts: '/category-images/discounts.jpg',
+  'Doors, Windows & Hardware': '/category-images/doors-windows-hardware.jpg',
+  'Drywall & Painting': '/category-images/drywall-painting.jpg',
+  'Exterior / Gutter / Pressure Washing': '/category-images/exterior-gutter-pressure-washing.jpg',
+  Flooring: '/category-images/flooring.jpg',
+  'Handyman / Home Repair': '/category-images/handyman-home-repair.jpg',
+  'Lawn / Outdoor Equipment': '/category-images/lawn-outdoor-equipment.jpg',
+  'Minor Electrical Repairs': '/category-images/minor-electrical-repairs.jpg',
+  'Minor Plumbing Repairs': '/category-images/minor-plumbing-repairs.jpg',
+  'Mounting & Assembly': '/category-images/mounting-assembly.jpg',
+  'PC Build Services': '/category-images/pc-build-services.jpg',
+  'Software Development': '/category-images/software-development.jpg',
+  'Tech Support': '/category-images/tech-support.jpg',
+  'Tile Work': '/category-images/tile-work.jpg',
+}
+
 const bootPaidSession = new URLSearchParams(window.location.search).get('paid_session') || ''
 if (bootPaidSession) window.history.replaceState(null, '', '/')
 
@@ -444,7 +467,11 @@ function PublicSite({ onSignIn }) {
                   aria-controls={panelId}
                 >
                   <span className="catalog-group__title">
-                    <span className="catalog-group__icon">{category.charAt(0).toUpperCase()}</span>
+                    <span className="catalog-group__image">
+                      {CATEGORY_IMAGES[category]
+                        ? <img src={CATEGORY_IMAGES[category]} alt="" loading="lazy" />
+                        : category.charAt(0).toUpperCase()}
+                    </span>
                     <span>
                       <strong>{category}</strong>
                       <small>{items.length} {items.length === 1 ? 'service' : 'services'}</small>
