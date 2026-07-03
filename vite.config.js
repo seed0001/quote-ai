@@ -309,7 +309,7 @@ const hostConfigPlugin = {
       const pathname = (req.url || '').split('?')[0]
       const allowed =
         (pathname === '/api/openrouter/api/v1/chat/completions' && req.method === 'POST')
-        || (pathname === '/api/openrouter/api/v1/models/user' && req.method === 'GET')
+        || (pathname === '/api/openrouter/api/v1/models' && req.method === 'GET')
         || (pathname === '/api/fish/model' && req.method === 'GET')
         || (pathname === '/api/fish/v1/tts' && req.method === 'POST')
         || pathname === '/api/host-config'
@@ -368,12 +368,14 @@ const hostConfigPlugin = {
           PUBLIC_CONFIG_FIELDS.forEach((field) => {
             if (incoming[field] !== undefined) next[field] = incoming[field]
           })
-          if (incoming.openRouterKey) next.openRouterKey = incoming.openRouterKey
-          if (incoming.fishAudioKey) next.fishAudioKey = incoming.fishAudioKey
-          if (incoming.resendKey) next.resendKey = incoming.resendKey
-          if (incoming.tavilyKey) next.tavilyKey = incoming.tavilyKey
-          if (incoming.braveSearchKey) next.braveSearchKey = incoming.braveSearchKey
-          if (incoming.stripeKey) next.stripeKey = incoming.stripeKey
+          // Trim every key on save so pasted whitespace/newlines never corrupt
+          // an auth header downstream.
+          if (incoming.openRouterKey) next.openRouterKey = String(incoming.openRouterKey).trim()
+          if (incoming.fishAudioKey) next.fishAudioKey = String(incoming.fishAudioKey).trim()
+          if (incoming.resendKey) next.resendKey = String(incoming.resendKey).trim()
+          if (incoming.tavilyKey) next.tavilyKey = String(incoming.tavilyKey).trim()
+          if (incoming.braveSearchKey) next.braveSearchKey = String(incoming.braveSearchKey).trim()
+          if (incoming.stripeKey) next.stripeKey = String(incoming.stripeKey).trim()
           fs.writeFileSync(HOST_CONFIG_FILE, JSON.stringify(next, null, 2), 'utf8')
           sendJson(res, 200, publicHostConfig())
         } catch (error) {
@@ -737,7 +739,9 @@ const hostConfigPlugin = {
 
 const injectHostKey = (configField) => (proxy) => {
   proxy.on('proxyReq', (proxyReq) => {
-    const key = readHostConfig()[configField]
+    // Trim: a stray space/newline pasted into the key corrupts the header and
+    // the provider rejects it as "Missing Authentication header".
+    const key = (readHostConfig()[configField] || '').trim()
     proxyReq.removeHeader('authorization')
     if (key) proxyReq.setHeader('Authorization', `Bearer ${key}`)
   })

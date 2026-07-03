@@ -1,4 +1,4 @@
-const OPENROUTER_MODELS_URL = '/api/openrouter/api/v1/models/user';
+const OPENROUTER_MODELS_URL = '/api/openrouter/api/v1/models';
 
 export async function fetchOpenRouterModels(apiKey) {
   const response = await fetch(OPENROUTER_MODELS_URL, {
