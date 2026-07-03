@@ -167,8 +167,19 @@ app.post('/api/public/lead', (req, res) => {
     res.status(400).json({ error: 'Please include your name and an email or phone number so we can reach you.' })
     return
   }
-  db.prepare('INSERT INTO leads (id, name, email, phone, interest, message, created_at, synced) VALUES (?, ?, ?, ?, ?, ?, ?, 0)')
-    .run(newId('lead'), name, email, phone, interest, message, new Date().toISOString())
+  // Selected catalog services: re-resolve every line server-side so a request
+  // can never carry made-up items or tampered prices.
+  const catalogById = new Map(getCatalog().map((item) => [item.id, item]))
+  const items = (Array.isArray(req.body?.items) ? req.body.items.slice(0, 60) : [])
+    .map((entry) => {
+      const source = catalogById.get(String(entry?.id))
+      if (!source) return null
+      const qty = Math.min(Math.max(Math.round(Number(entry?.qty)) || 1, 1), 999)
+      return { id: source.id, name: source.name, category: source.category, unit: source.unit, price: source.price, qty }
+    })
+    .filter(Boolean)
+  db.prepare('INSERT INTO leads (id, name, email, phone, interest, message, items, created_at, synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)')
+    .run(newId('lead'), name, email, phone, interest, message, JSON.stringify(items), new Date().toISOString())
   res.json({ ok: true })
 })
 
@@ -585,7 +596,12 @@ app.get('/api/sync/pull', requireSync, (req, res) => {
   res.json({
     messages: db.prepare("SELECT id, client_id AS clientId, text, created_at AS timestamp FROM messages WHERE sender = 'client' AND synced = 0 ORDER BY created_at ASC").all(),
     payments: db.prepare('SELECT id, client_id AS clientId, project_id AS projectId, milestone_id AS milestoneId, amount, stripe_session AS stripeSession, paid_at AS paidAt FROM payments WHERE synced = 0 ORDER BY paid_at ASC').all(),
-    leads: db.prepare('SELECT id, name, email, phone, interest, message, created_at AS createdAt FROM leads WHERE synced = 0 ORDER BY created_at ASC').all(),
+    leads: db.prepare('SELECT id, name, email, phone, interest, message, items, created_at AS createdAt FROM leads WHERE synced = 0 ORDER BY created_at ASC').all()
+      .map((lead) => {
+        let items = []
+        try { items = JSON.parse(lead.items) } catch { /* legacy lead without items */ }
+        return { ...lead, items: Array.isArray(items) ? items : [] }
+      }),
   })
 })
 

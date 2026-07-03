@@ -106,6 +106,12 @@ db.exec(`
   );
 `)
 
+// Older databases predate the quote-request items column — add it in place.
+const leadColumns = db.prepare('PRAGMA table_info(leads)').all().map((c) => c.name)
+if (!leadColumns.includes('items')) {
+  db.exec("ALTER TABLE leads ADD COLUMN items TEXT DEFAULT '[]'")
+}
+
 // ---- Passwords (scrypt, no external deps) --------------------------------
 export const hashPassword = (password) => {
   const salt = crypto.randomBytes(16).toString('hex')

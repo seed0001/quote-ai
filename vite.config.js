@@ -519,10 +519,18 @@ const runPortalSync = async () => {
         const taskId = `task-lead-${lead.id}`
         if (known.has(taskId)) continue
         const contact = [lead.email, lead.phone].filter(Boolean).join(' · ')
+        const items = Array.isArray(lead.items) ? lead.items : []
+        const itemLines = items.map((it) =>
+          `• ${it.qty} × ${it.name}${it.unit ? ` (${it.unit})` : ''}${Number(it.price) > 0 ? ` — from $${(Number(it.price) * (Number(it.qty) || 1)).toFixed(2)}` : ' — quoted'}`)
         tasks.push({
           id: taskId,
           title: `New website lead: ${lead.name}`,
-          description: `${lead.interest ? `Interested in: ${lead.interest}\n` : ''}${contact ? `Contact: ${contact}\n` : ''}${lead.message || ''}`.trim(),
+          description: [
+            lead.interest ? `Interested in: ${lead.interest}` : '',
+            contact ? `Contact: ${contact}` : '',
+            itemLines.length ? `Requested services:\n${itemLines.join('\n')}` : '',
+            lead.message || '',
+          ].filter(Boolean).join('\n'),
           status: 'todo',
           date: String(lead.createdAt || '').slice(0, 10),
           projectId: '',
@@ -533,6 +541,7 @@ const runPortalSync = async () => {
           `<p><strong>${escapeHtml(lead.name)}</strong> requested a quote through the website.</p>
            ${lead.interest ? `<p>Interested in: <strong>${escapeHtml(lead.interest)}</strong></p>` : ''}
            ${contact ? `<p>Contact: ${escapeHtml(contact)}</p>` : ''}
+           ${itemLines.length ? `<p>Requested services:</p><ul>${itemLines.map((line) => `<li>${escapeHtml(line.replace(/^• /, ''))}</li>`).join('')}</ul>` : ''}
            ${lead.message ? `<p>${escapeHtml(lead.message)}</p>` : ''}`)
         summary.newLeads = (summary.newLeads || 0) + 1
       }

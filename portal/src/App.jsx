@@ -19,6 +19,7 @@ import {
   Menu,
   MessageCircle,
   Phone,
+  Plus,
   Send,
   ShieldCheck,
   Sparkles,
@@ -125,6 +126,7 @@ function PublicSite({ onSignIn }) {
   const [leadBusy, setLeadBusy] = useState(false)
   const [leadDone, setLeadDone] = useState(false)
   const [leadError, setLeadError] = useState('')
+  const [selection, setSelection] = useState({}) // catalog item id -> quantity
 
   useEffect(() => {
     fetch('/api/public/site')
@@ -153,6 +155,31 @@ function PublicSite({ onSignIn }) {
     window.scrollTo(0, 0)
   }
 
+  // ---- Build-your-own quote request ----
+  const selectedItems = Object.entries(selection)
+    .map(([id, qty]) => {
+      const item = catalog.find((entry) => entry.id === id)
+      return item ? { ...item, qty } : null
+    })
+    .filter(Boolean)
+
+  const estimateTotal = selectedItems.reduce((sum, item) => sum + (Number(item.price) > 0 ? Number(item.price) * item.qty : 0), 0)
+  const hasQuotedOnly = selectedItems.some((item) => !(Number(item.price) > 0))
+
+  const toggleItem = (id) => {
+    setSelection((current) => {
+      const next = { ...current }
+      if (next[id]) delete next[id]
+      else next[id] = 1
+      return next
+    })
+  }
+
+  const setItemQty = (id, qty) => {
+    const clean = Math.min(Math.max(Math.round(Number(qty)) || 1, 1), 999)
+    setSelection((current) => ({ ...current, [id]: clean }))
+  }
+
   const setField = (field) => (event) => setLead((current) => ({ ...current, [field]: event.target.value }))
 
   const submitLead = async (event) => {
@@ -164,11 +191,15 @@ function PublicSite({ onSignIn }) {
       const response = await fetch('/api/public/lead', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(lead),
+        body: JSON.stringify({
+          ...lead,
+          items: Object.entries(selection).map(([id, qty]) => ({ id, qty })),
+        }),
       })
       const data = await response.json()
       if (!response.ok) throw new Error(data.error || 'Something went wrong — please try again.')
       setLeadDone(true)
+      setSelection({})
     } catch (error) {
       setLeadError(error.message)
     } finally {
@@ -253,7 +284,7 @@ function PublicSite({ onSignIn }) {
         <div className="site-section__head">
           <span className="eyebrow">Straightforward pricing</span>
           <h2>Services & rates</h2>
-          <p>Real rates from our live catalog — every job gets a written quote before work begins.</p>
+          <p>Real rates from our live catalog. Add the services you need to build a quote request, then tell us about your project below — we'll follow up with a written quote.</p>
         </div>
         {catalog.length ? (
           <div className="catalog-groups">
@@ -266,6 +297,17 @@ function PublicSite({ onSignIn }) {
                       <strong>{item.name}</strong>
                       <span>{Number(item.price) > 0 ? <>from <b>{formatCurrency(item.price)}</b>{item.unit ? ` / ${item.unit}` : ''}</> : 'quoted'}</span>
                       {item.description && <p>{item.description}</p>}
+                      <div className="catalog-item__actions">
+                        {selection[item.id] ? (
+                          <button className="pick-btn pick-btn--on" onClick={() => toggleItem(item.id)}>
+                            <Check size={14} /> Added to request — remove
+                          </button>
+                        ) : (
+                          <button className="pick-btn" onClick={() => toggleItem(item.id)}>
+                            <Plus size={14} /> Add to quote request
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -311,6 +353,41 @@ function PublicSite({ onSignIn }) {
             </div>
           ) : (
             <form className="lead-form" onSubmit={submitLead}>
+              {selectedItems.length > 0 ? (
+                <div className="request-items">
+                  <div className="request-items__head">Your selected services</div>
+                  {selectedItems.map((item) => (
+                    <div className="request-item" key={item.id}>
+                      <div className="request-item__name">
+                        <strong>{item.name}</strong>
+                        {item.unit && <small>per {item.unit}</small>}
+                      </div>
+                      <input
+                        type="number"
+                        min="1"
+                        max="999"
+                        value={item.qty}
+                        onChange={(event) => setItemQty(item.id, event.target.value)}
+                        aria-label={`Quantity for ${item.name}`}
+                      />
+                      <span>{Number(item.price) > 0 ? formatCurrency(item.price * item.qty) : 'quoted'}</span>
+                      <button type="button" onClick={() => toggleItem(item.id)} aria-label={`Remove ${item.name}`}><X size={15} /></button>
+                    </div>
+                  ))}
+                  <div className="request-items__total">
+                    <span>Starting estimate{hasQuotedOnly ? ' (plus quoted items)' : ''}</span>
+                    <strong>{formatCurrency(estimateTotal)}{hasQuotedOnly ? '+' : ''}</strong>
+                  </div>
+                  <small className="request-items__note">
+                    A starting point, not a bill — you'll get a written quote before any work begins.
+                  </small>
+                </div>
+              ) : (
+                <div className="request-items request-items--empty">
+                  Tip: add services from the catalog above and they'll attach to your request.
+                </div>
+              )}
+
               <label className="field">
                 <span>Your name</span>
                 <div className="field__control"><Users size={17} /><input value={lead.name} onChange={setField('name')} placeholder="Jane Smith" required /></div>
@@ -350,6 +427,16 @@ function PublicSite({ onSignIn }) {
           )}
         </div>
       </section>
+
+      {selectedItems.length > 0 && !leadDone && (
+        <div className="request-bar">
+          <span>
+            <strong>{selectedItems.length}</strong> service{selectedItems.length === 1 ? '' : 's'} in your quote request
+            {estimateTotal > 0 && <> · from {formatCurrency(estimateTotal)}{hasQuotedOnly ? '+' : ''}</>}
+          </span>
+          <button onClick={() => goAnchor('quote')}>Review & send <ArrowRight size={15} /></button>
+        </div>
+      )}
       </>
       )}
 
