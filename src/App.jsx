@@ -16,7 +16,8 @@ import {
   CalendarDays,
   BookUser,
   Cpu,
-  BookOpen
+  BookOpen,
+  Newspaper
 } from 'lucide-react';
 import { playClick, setSoundVolume, setSoundEnabled, setSoundPack } from './utils/soundEngine';
 import {
@@ -37,7 +38,9 @@ import {
   getKnowledgeBase,
   saveKnowledgeBase,
   getPortalMessages,
-  savePortalMessages
+  savePortalMessages,
+  getSitePosts,
+  saveSitePosts
 } from './utils/dataStore';
 import Dashboard from './components/Dashboard';
 import ClientDirectory from './components/ClientDirectory';
@@ -47,6 +50,7 @@ import KnowledgeBase from './components/KnowledgeBase';
 import QuoteBuilder from './components/QuoteBuilder';
 import ProjectDetail from './components/ProjectDetail';
 import SettingsView from './components/SettingsView';
+import SitePosts from './components/SitePosts';
 
 import AIChat from './components/AIChat';
 import PriceCatalog from './components/PriceCatalog';
@@ -64,6 +68,7 @@ export default function App() {
   const [catalog, setCatalog] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [portalMessages, setPortalMessages] = useState([]);
+  const [sitePosts, setSitePosts] = useState([]);
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [theme, setTheme] = useState('dark');
 
@@ -79,6 +84,7 @@ export default function App() {
     setCatalog(getCatalog());
     setTasks(getTasks());
     setPortalMessages(getPortalMessages());
+    setSitePosts(getSitePosts());
     hydrateFromHost().then(() => {
       setProjects(getProjects());
       setClients(getClients());
@@ -87,6 +93,7 @@ export default function App() {
       setCatalog(getCatalog());
       setTasks(getTasks());
       setPortalMessages(getPortalMessages());
+      setSitePosts(getSitePosts());
     });
     const localSettings = getSettings();
     setSettings(localSettings);
@@ -223,6 +230,11 @@ export default function App() {
     savePortalMessages(newMessages);
   };
 
+  const handleUpdateSitePosts = (newPosts) => {
+    setSitePosts(newPosts);
+    saveSitePosts(newPosts);
+  };
+
   const toggleTheme = () => {
     const themes = ['dark', 'light', 'ocean', 'forest', 'midnight'];
     const currentTheme = settings.theme || 'dark';
@@ -285,6 +297,13 @@ export default function App() {
         );
       case 'agent-workspace':
         return <AgentWorkspace />;
+      case 'site-posts':
+        return (
+          <SitePosts
+            sitePosts={sitePosts}
+            onSitePostsChange={handleUpdateSitePosts}
+          />
+        );
       case 'knowledge-base':
         return (
           <KnowledgeBase
@@ -447,12 +466,20 @@ export default function App() {
             Knowledge Base
           </div>
 
-          <div 
+          <div
             className={`menu-item ${currentView === 'ai-chat' ? 'active' : ''}`}
             onClick={() => { setCurrentView('ai-chat'); setActiveProjectId(null); }}
           >
             <MessageSquare size={18} />
             AI Voice Chat
+          </div>
+
+          <div
+            className={`menu-item ${currentView === 'site-posts' ? 'active' : ''}`}
+            onClick={() => { setCurrentView('site-posts'); setActiveProjectId(null); }}
+          >
+            <Newspaper size={18} />
+            Website Posts
           </div>
 
           <div

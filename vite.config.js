@@ -9,7 +9,7 @@ const HOST_CONFIG_FILE = path.resolve(process.cwd(), '.quote-flow-host-config.js
 // (local or over the tunnel) reads and writes these files, so the data never
 // lives in an individual browser.
 const DATA_DIR = path.resolve(process.cwd(), 'quote-flow-data')
-const DATA_COLLECTIONS = ['projects', 'clients', 'catalog', 'tasks', 'knowledgeBase', 'contacts', 'portalMessages']
+const DATA_COLLECTIONS = ['projects', 'clients', 'catalog', 'tasks', 'knowledgeBase', 'contacts', 'portalMessages', 'sitePosts']
 const PUBLIC_CONFIG_FIELDS = [
   'companyName',
   'businessType',
@@ -427,6 +427,18 @@ const runPortalSync = async () => {
           price: Number(item.price) || 0,
           description: item.description || '',
         })),
+        // Website posts: only ones explicitly marked published leave this
+        // machine. The portal replaces its whole set on each publish.
+        posts: readCollection('sitePosts')
+          .filter((p) => p.published)
+          .map((p) => ({
+            id: p.id,
+            title: p.title,
+            tag: p.tag || 'news',
+            body: p.body || '',
+            date: p.date || '',
+            images: (p.images || []).map((im) => ({ id: im.id, url: im.url })),
+          })),
       }),
     })
     if (!publishRes.ok) {

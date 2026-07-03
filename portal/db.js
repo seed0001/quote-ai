@@ -71,6 +71,15 @@ db.exec(`
     description TEXT DEFAULT '',
     updated_at TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS posts (
+    id TEXT PRIMARY KEY,            -- matches the hub's post id
+    title TEXT NOT NULL,
+    tag TEXT DEFAULT 'news',
+    body TEXT DEFAULT '',
+    date TEXT DEFAULT '',
+    images TEXT DEFAULT '[]',       -- JSON array of { id, url }
+    updated_at TEXT NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS leads (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -204,6 +213,27 @@ export const messagesForClient = (clientId) =>
 // ---- Public catalog (published by the hub) ---------------------------------
 export const getCatalog = () =>
   db.prepare('SELECT id, name, category, unit, price, description FROM catalog ORDER BY category COLLATE NOCASE, name COLLATE NOCASE').all()
+
+// ---- Website posts (published by the hub) ----------------------------------
+export const getPosts = () =>
+  db.prepare('SELECT id, title, tag, body, date, images FROM posts ORDER BY date DESC, updated_at DESC').all().map((p) => {
+    let images = []
+    try { images = JSON.parse(p.images) } catch { /* render without images */ }
+    return { ...p, images: Array.isArray(images) ? images : [] }
+  })
+
+export const replacePosts = (posts) => {
+  const now = new Date().toISOString()
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM posts').run()
+    const insert = db.prepare('INSERT INTO posts (id, title, tag, body, date, images, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    for (const post of posts) {
+      if (!post?.id || !post?.title) continue
+      insert.run(post.id, post.title, post.tag || 'news', post.body || '', post.date || '', JSON.stringify(post.images || []), now)
+    }
+  })
+  tx()
+}
 
 // The hub's catalog is the source of truth — each publish replaces the set.
 export const replaceCatalog = (items) => {

@@ -20,8 +20,95 @@ const OPENROUTER_URL = '/api/openrouter/api/v1/chat/completions';
 const FALLBACK_MODEL = 'meta-llama/llama-3.3-70b-instruct:free';
 
 const VALID_STATUSES = ['lead', 'quoting', 'scheduled', 'progress', 'completed'];
-const VALID_VIEWS = ['dashboard', 'clients', 'quote-builder', 'project-detail', 'settings', 'calendar'];
+const VALID_VIEWS = ['dashboard', 'clients', 'contacts', 'quote-builder', 'project-detail', 'settings', 'calendar', 'agent-workspace'];
 const VALID_TASK_STATUSES = ['todo', 'in_progress', 'done'];
+
+export const SUPPORTED_ACTION_TYPES = [
+  'CREATE_CLIENT', 'UPDATE_CLIENT', 'DELETE_CLIENT',
+  'CREATE_CONTACT', 'UPDATE_CONTACT', 'DELETE_CONTACT',
+  'CREATE_PROJECT', 'UPDATE_PROJECT_STATUS', 'UPDATE_PROJECT', 'ADD_PROJECT_LOG',
+  'ADD_QUOTE_ITEM', 'UPDATE_QUOTE_ITEM', 'DELETE_QUOTE_ITEM',
+  'ADD_CHECKLIST_ITEM', 'TOGGLE_CHECKLIST_ITEM',
+  'CREATE_CHANGE_ORDER', 'APPROVE_CHANGE_ORDER', 'REJECT_CHANGE_ORDER',
+  'CREATE_CATALOG_ITEM', 'UPDATE_CATALOG_ITEM', 'DELETE_CATALOG_ITEM',
+  'CREATE_TASK', 'UPDATE_TASK', 'DELETE_TASK',
+  'SEND_EMAIL_TO_CLIENT', 'SEND_SMS', 'SWITCH_VIEW',
+  'WRITE_FILE', 'READ_FILE', 'RUN_COMMAND', 'SPAWN_SUBAGENT',
+  'CREATE_KNOWLEDGE_ARTICLE', 'UPDATE_KNOWLEDGE_ARTICLE', 'DELETE_KNOWLEDGE_ARTICLE'
+];
+
+const ACTION_TYPE_ALIASES = {
+  CHANGE_VIEW: 'SWITCH_VIEW',
+  NAVIGATE: 'SWITCH_VIEW',
+  NAVIGATE_TO_VIEW: 'SWITCH_VIEW',
+  SEND_EMAIL: 'SEND_EMAIL_TO_CLIENT',
+  EMAIL_CLIENT: 'SEND_EMAIL_TO_CLIENT',
+  SEND_TEXT: 'SEND_SMS',
+  SEND_TEXT_MESSAGE: 'SEND_SMS',
+  CREATE_FILE: 'WRITE_FILE',
+  UPDATE_FILE: 'WRITE_FILE',
+  WRITE_TO_FILE: 'WRITE_FILE',
+  GET_FILE: 'READ_FILE',
+  READ_FROM_FILE: 'READ_FILE',
+  EXEC_COMMAND: 'RUN_COMMAND',
+  EXECUTE_COMMAND: 'RUN_COMMAND',
+  RUN_SHELL_COMMAND: 'RUN_COMMAND',
+  SHELL_COMMAND: 'RUN_COMMAND',
+  SPAWN_AGENT: 'SPAWN_SUBAGENT',
+  CREATE_SUBAGENT: 'SPAWN_SUBAGENT',
+  CREATE_SUB_AGENT: 'SPAWN_SUBAGENT'
+};
+
+const canonicalActionType = (value) => {
+  const normalized = String(value || '')
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toUpperCase();
+  return ACTION_TYPE_ALIASES[normalized] || normalized;
+};
+
+// Models do not always serialize tool calls in the exact same wrapper. Accept
+// the common action/function-call shapes, then reduce them to the one internal
+// contract used by both validation and dispatch.
+export function normalizeAction(action) {
+  if (!action || typeof action !== 'object') return action;
+
+  const functionCall = action.function && typeof action.function === 'object'
+    ? action.function
+    : null;
+  const type = canonicalActionType(
+    action.type
+    || action.actionType
+    || action.action
+    || action.name
+    || action.tool
+    || action.toolName
+    || functionCall?.name
+  );
+
+  let payload = action.payload
+    ?? action.params
+    ?? action.parameters
+    ?? action.arguments
+    ?? action.input
+    ?? functionCall?.arguments
+    ?? {};
+
+  if (typeof payload === 'string') {
+    try {
+      payload = JSON.parse(payload);
+    } catch {
+      payload = {};
+    }
+  }
+
+  return {
+    type,
+    payload: payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {}
+  };
+}
 
 const ACTION_SCHEMA = `Available Actions Schema:
 - { "type": "CREATE_CLIENT", "payload": { "name": string, "company": string, "email": string, "phone": string, "address": string, "notes": string, "id": string (optional temporary id, see rules) } }
@@ -602,19 +689,20 @@ export function validateActions(actions, context) {
   const knowledgeBaseIds = new Set((context.knowledgeBase || []).map(k => k.id));
 
   for (const action of actions) {
-    const reason = actionRejectionReason(action, clientIds, projectIds, catalogIds, taskIds, contactIds, knowledgeBaseIds);
+    const normalizedAction = normalizeAction(action);
+    const reason = actionRejectionReason(normalizedAction, clientIds, projectIds, catalogIds, taskIds, contactIds, knowledgeBaseIds);
     if (reason) {
-      rejected.push({ action, reason });
+      rejected.push({ action: normalizedAction, originalAction: action, reason });
       continue;
     }
-    valid.push(action);
+    valid.push(normalizedAction);
     // Register ids minted in this batch so later actions can reference them.
-    if (action.type === 'CREATE_CLIENT' && action.payload?.id) clientIds.add(action.payload.id);
-    if (action.type === 'CREATE_CONTACT' && action.payload?.id) contactIds.add(action.payload.id);
-    if (action.type === 'CREATE_PROJECT' && action.payload?.id) projectIds.add(action.payload.id);
-    if (action.type === 'CREATE_CATALOG_ITEM' && action.payload?.id) catalogIds.add(action.payload.id);
-    if (action.type === 'CREATE_TASK' && action.payload?.id) taskIds.add(action.payload.id);
-    if (action.type === 'CREATE_KNOWLEDGE_ARTICLE' && action.payload?.id) knowledgeBaseIds.add(action.payload.id);
+    if (normalizedAction.type === 'CREATE_CLIENT' && normalizedAction.payload?.id) clientIds.add(normalizedAction.payload.id);
+    if (normalizedAction.type === 'CREATE_CONTACT' && normalizedAction.payload?.id) contactIds.add(normalizedAction.payload.id);
+    if (normalizedAction.type === 'CREATE_PROJECT' && normalizedAction.payload?.id) projectIds.add(normalizedAction.payload.id);
+    if (normalizedAction.type === 'CREATE_CATALOG_ITEM' && normalizedAction.payload?.id) catalogIds.add(normalizedAction.payload.id);
+    if (normalizedAction.type === 'CREATE_TASK' && normalizedAction.payload?.id) taskIds.add(normalizedAction.payload.id);
+    if (normalizedAction.type === 'CREATE_KNOWLEDGE_ARTICLE' && normalizedAction.payload?.id) knowledgeBaseIds.add(normalizedAction.payload.id);
   }
 
   return { valid, rejected };

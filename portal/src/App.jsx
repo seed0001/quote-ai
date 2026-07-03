@@ -51,6 +51,12 @@ const formatDate = (value, withTime = false) => {
     : { dateStyle: 'medium' })
 }
 
+const POST_TAGS = {
+  project: 'Project highlight',
+  roadmap: 'Roadmap',
+  news: 'News',
+}
+
 const bootPaidSession = new URLSearchParams(window.location.search).get('paid_session') || ''
 if (bootPaidSession) window.history.replaceState(null, '', '/')
 
@@ -92,8 +98,29 @@ function ServiceStrip() {
   )
 }
 
+function PostCard({ post, full = false }) {
+  const paragraphs = (post.body || '').split(/\n\s*\n/).filter(Boolean)
+  return (
+    <article className="post-card">
+      <div className="post-card__meta">
+        <span className={`post-tag post-tag--${post.tag || 'news'}`}>{POST_TAGS[post.tag] || 'News'}</span>
+        {post.date && <time>{formatDate(post.date)}</time>}
+      </div>
+      <h3>{post.title}</h3>
+      {(full ? paragraphs : paragraphs.slice(0, 2)).map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+      {!full && paragraphs.length > 2 && <p className="post-card__more">…</p>}
+      {(post.images || []).length > 0 && (
+        <div className="post-card__photos">
+          {post.images.map((image) => <img key={image.id} src={image.url} alt="" loading="lazy" />)}
+        </div>
+      )}
+    </article>
+  )
+}
+
 function PublicSite({ onSignIn }) {
   const [site, setSite] = useState(null)
+  const [page, setPage] = useState('home')
   const [lead, setLead] = useState({ name: '', email: '', phone: '', interest: '', message: '' })
   const [leadBusy, setLeadBusy] = useState(false)
   const [leadDone, setLeadDone] = useState(false)
@@ -108,7 +135,23 @@ function PublicSite({ onSignIn }) {
 
   const business = site?.business || {}
   const catalog = site?.catalog || []
+  const posts = site?.posts || []
   const categories = [...new Set(catalog.map((item) => item.category || 'Services'))]
+
+  // Nav works from both pages: jump home first if needed, then scroll.
+  const goAnchor = (id) => {
+    if (page !== 'home') {
+      setPage('home')
+      setTimeout(() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' }), 60)
+    } else {
+      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }
+
+  const goWorkshop = () => {
+    setPage('workshop')
+    window.scrollTo(0, 0)
+  }
 
   const setField = (field) => (event) => setLead((current) => ({ ...current, [field]: event.target.value }))
 
@@ -138,13 +181,31 @@ function PublicSite({ onSignIn }) {
       <header className="site-header">
         <BrandMark compact />
         <nav className="site-nav">
-          <a href="#services">Services</a>
-          <a href="#catalog">Pricing</a>
-          <a href="#quote">Request a quote</a>
+          <button onClick={() => goAnchor('services')}>Services</button>
+          <button onClick={() => goAnchor('catalog')}>Pricing</button>
+          <button className={page === 'workshop' ? 'active' : ''} onClick={goWorkshop}>Workshop</button>
+          <button onClick={() => goAnchor('quote')}>Request a quote</button>
         </nav>
         <button className="site-signin" onClick={onSignIn}><LockKeyhole size={15} /> Client sign in</button>
       </header>
 
+      {page === 'workshop' ? (
+        <section className="site-section">
+          <div className="site-section__head">
+            <span className="eyebrow">From the workshop</span>
+            <h2>Projects, roadmap & news</h2>
+            <p>What we're building, what we just finished, and what's coming next.</p>
+          </div>
+          {posts.length ? (
+            <div className="post-list">
+              {posts.map((post) => <PostCard post={post} full key={post.id} />)}
+            </div>
+          ) : (
+            <p className="catalog-empty">Nothing posted yet — check back soon.</p>
+          )}
+        </section>
+      ) : (
+      <>
       <section className="site-hero" style={{ backgroundImage: `url(${workshopHero})` }}>
         <div className="site-hero__shade" />
         <div className="site-hero__content">
@@ -218,7 +279,20 @@ function PublicSite({ onSignIn }) {
         )}
       </section>
 
-      <section className="site-section" id="quote">
+      {posts.length > 0 && (
+        <section className="site-section">
+          <div className="site-section__head">
+            <span className="eyebrow">From the workshop</span>
+            <h2>Recent work & updates</h2>
+          </div>
+          <div className="post-list post-list--grid">
+            {posts.slice(0, 2).map((post) => <PostCard post={post} key={post.id} />)}
+          </div>
+          <button className="see-all-posts" onClick={goWorkshop}>See all updates <ArrowRight size={16} /></button>
+        </section>
+      )}
+
+      <section className="site-section site-section--alt" id="quote">
         <div className="lead-panel">
           <div className="lead-panel__pitch">
             <span className="eyebrow">Start a project</span>
@@ -278,6 +352,8 @@ function PublicSite({ onSignIn }) {
           )}
         </div>
       </section>
+      </>
+      )}
 
       <footer className="site-footer">
         <BrandMark compact />

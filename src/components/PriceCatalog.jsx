@@ -127,70 +127,52 @@ export default function PriceCatalog({ catalog, onCatalogChange }) {
         </select>
       </div>
 
-      {/* Product Table */}
-      <div className="table-container" style={{ flex: 1, overflowY: 'auto', border: '1px solid var(--border-color)' }}>
-        <table className="app-table" style={{ fontSize: '13px' }}>
-          <thead>
-            <tr>
-              <th>Product / Service</th>
-              <th style={{ width: '14%' }}>Category</th>
-              <th style={{ width: '9%' }}>Unit</th>
-              <th style={{ width: '11%', textAlign: 'right' }}>Price</th>
-              <th style={{ width: '18%' }}>Vendor / Source</th>
-              <th style={{ width: '8%' }}></th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.length === 0 ? (
-              <tr>
-                <td colSpan={6} style={{ padding: '32px', textAlign: 'center', color: 'var(--text-secondary)' }}>
-                  No products match. Adjust your search or add a new product.
-                </td>
-              </tr>
-            ) : (
-              filtered.map(item => (
-                <tr key={item.id}>
-                  <td>
-                    <div style={{ fontWeight: '600' }}>{item.name}</div>
-                    {item.description && (
-                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                        {item.description}
-                      </div>
-                    )}
-                  </td>
-                  <td>
-                    <span className="badge badge-quoting" style={{ fontSize: '10px' }}>{item.category}</span>
-                  </td>
-                  <td style={{ color: 'var(--text-secondary)' }}>{item.unit}</td>
-                  <td style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: '600', color: 'var(--accent)' }}>
-                    {formatPrice(item.price)}
-                  </td>
-                  <td style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>{item.store || '—'}</td>
-                  <td>
-                    <div style={{ display: 'flex', gap: '4px', justifyContent: 'flex-end' }}>
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        style={{ padding: '4px 8px' }}
-                        onClick={() => openEdit(item)}
-                        title="Edit product"
-                      >
-                        <Edit2 size={12} />
-                      </button>
-                      <button
-                        className="btn btn-secondary btn-sm"
-                        style={{ padding: '4px 8px', color: 'var(--danger)' }}
-                        onClick={() => handleDelete(item.id)}
-                        title="Delete product"
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+      {/* Product cards: details and price above, full-width description below. */}
+      <div className="catalog-card-list">
+        {filtered.length === 0 ? (
+          <div className="catalog-empty">
+            No products match. Adjust your search or add a new product.
+          </div>
+        ) : (
+          filtered.map(item => (
+            <article key={item.id} className="catalog-card">
+              <div className="catalog-card-main">
+                <h3>{item.name}</h3>
+                <div className="catalog-card-meta">
+                  <span className="badge badge-quoting">{item.category}</span>
+                  <span><strong>Unit</strong>{item.unit}</span>
+                  <span><strong>Vendor / source</strong>{item.store || '—'}</span>
+                </div>
+              </div>
+
+              <div className="catalog-card-price">
+                <span>Unit price</span>
+                <strong>{formatPrice(item.price)}</strong>
+                <div className="catalog-card-actions">
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => openEdit(item)}
+                    title="Edit product"
+                  >
+                    <Edit2 size={12} /> Edit
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-sm catalog-delete"
+                    onClick={() => handleDelete(item.id)}
+                    title="Delete product"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="catalog-card-description">
+                <span>Description</span>
+                <p>{item.description || 'No description provided.'}</p>
+              </div>
+            </article>
+          ))
+        )}
       </div>
 
       {/* Add / Edit Modal */}

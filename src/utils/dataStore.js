@@ -12,6 +12,7 @@ const TASKS_KEY = 'quote_ai_tasks';
 const CONTACTS_KEY = 'quote_ai_contacts';
 const KNOWLEDGE_KEY = 'quote_ai_knowledge';
 const PORTAL_MESSAGES_KEY = 'quote_ai_portal_messages';
+const SITE_POSTS_KEY = 'quote_ai_site_posts';
 
 const DEFAULT_SETTINGS = {
   companyName: 'My Business',
@@ -59,8 +60,8 @@ const DEFAULT_SETTINGS = {
 // per-record POST/PUT/DELETE calls so two employees editing at once don't
 // clobber each other's records.
 // ---------------------------------------------------------------------------
-const cache = { projects: [], clients: [], catalog: [], tasks: [], contacts: [], knowledgeBase: [], portalMessages: [] };
-const LOCAL_KEYS = { projects: PROJECTS_KEY, clients: CLIENTS_KEY, catalog: CATALOG_KEY, tasks: TASKS_KEY, contacts: CONTACTS_KEY, knowledgeBase: KNOWLEDGE_KEY, portalMessages: PORTAL_MESSAGES_KEY };
+const cache = { projects: [], clients: [], catalog: [], tasks: [], contacts: [], knowledgeBase: [], portalMessages: [], sitePosts: [] };
+const LOCAL_KEYS = { projects: PROJECTS_KEY, clients: CLIENTS_KEY, catalog: CATALOG_KEY, tasks: TASKS_KEY, contacts: CONTACTS_KEY, knowledgeBase: KNOWLEDGE_KEY, portalMessages: PORTAL_MESSAGES_KEY, sitePosts: SITE_POSTS_KEY };
 
 const mirrorLocal = (name) => {
   try {
@@ -123,6 +124,7 @@ export const initDataStore = () => {
   cache.contacts = readLocal(CONTACTS_KEY);
   cache.knowledgeBase = readLocal(KNOWLEDGE_KEY);
   cache.portalMessages = readLocal(PORTAL_MESSAGES_KEY);
+  cache.sitePosts = readLocal(SITE_POSTS_KEY);
   if (!localStorage.getItem(SETTINGS_KEY)) {
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(DEFAULT_SETTINGS));
@@ -147,6 +149,7 @@ export const hydrateFromHost = async () => {
     cache.contacts = Array.isArray(data.contacts) ? data.contacts : [];
     cache.knowledgeBase = Array.isArray(data.knowledgeBase) ? data.knowledgeBase : [];
     cache.portalMessages = Array.isArray(data.portalMessages) ? data.portalMessages : [];
+    cache.sitePosts = Array.isArray(data.sitePosts) ? data.sitePosts : [];
     mirrorLocal('projects');
     mirrorLocal('clients');
     mirrorLocal('catalog');
@@ -154,6 +157,7 @@ export const hydrateFromHost = async () => {
     mirrorLocal('contacts');
     mirrorLocal('knowledgeBase');
     mirrorLocal('portalMessages');
+    mirrorLocal('sitePosts');
     return true;
   } catch (e) {
     console.error('Host unreachable — using local fallback data.', e);
@@ -176,6 +180,8 @@ export const getContacts = () => cache.contacts;
 export const getKnowledgeBase = () => cache.knowledgeBase;
 
 export const getPortalMessages = () => cache.portalMessages;
+
+export const getSitePosts = () => cache.sitePosts;
 
 export const getSettings = () => {
   try {
@@ -202,6 +208,7 @@ export const masterResetData = () => {
   cache.contacts = [];
   cache.knowledgeBase = [];
   cache.portalMessages = [];
+  cache.sitePosts = [];
   const appKeys = [];
   for (let index = 0; index < localStorage.length; index += 1) {
     const key = localStorage.key(index);
@@ -227,6 +234,8 @@ export const saveContacts = (contacts) => setCollection('contacts', contacts);
 export const saveKnowledgeBase = (kb) => setCollection('knowledgeBase', kb);
 
 export const savePortalMessages = (messages) => setCollection('portalMessages', messages);
+
+export const saveSitePosts = (posts) => setCollection('sitePosts', posts);
 
 export const addTask = (task) => {
   const newTask = {

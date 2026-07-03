@@ -21,6 +21,8 @@ import {
   messagesForClient,
   getCatalog,
   replaceCatalog,
+  getPosts,
+  replacePosts,
 } from './db.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -147,6 +149,7 @@ app.get('/api/public/site', (_req, res) => {
       phone: business.phone || '',
     },
     catalog: getCatalog(),
+    posts: getPosts(),
   })
 })
 
@@ -490,9 +493,9 @@ app.post('/api/verify-payment', requireClient, async (req, res) => {
 // PULLS new messages/payments back — the portal never initiates connections.
 // ============================================================================
 app.post('/api/sync/publish', requireSync, (req, res) => {
-  const { business, clients, projects, replies, catalog } = req.body || {}
+  const { business, clients, projects, replies, catalog, posts } = req.body || {}
   const now = new Date().toISOString()
-  const summary = { clients: 0, projects: 0, replies: 0, catalog: 0 }
+  const summary = { clients: 0, projects: 0, replies: 0, catalog: 0, posts: 0 }
 
   const tx = db.transaction(() => {
     if (business && typeof business === 'object') setBusiness(business)
@@ -500,6 +503,11 @@ app.post('/api/sync/publish', requireSync, (req, res) => {
     if (Array.isArray(catalog)) {
       replaceCatalog(catalog)
       summary.catalog = catalog.length
+    }
+
+    if (Array.isArray(posts)) {
+      replacePosts(posts)
+      summary.posts = posts.length
     }
 
     for (const c of Array.isArray(clients) ? clients : []) {
