@@ -27,6 +27,9 @@ import {
   X,
 } from 'lucide-react'
 import workshopHero from './workshop-hero.png'
+import serviceHome from './assets/service-home.jpg'
+import serviceAuto from './assets/service-auto.jpg'
+import serviceTech from './assets/service-tech.jpg'
 
 const STATUS_LABELS = {
   lead: 'New inquiry',
@@ -51,10 +54,26 @@ const formatDate = (value, withTime = false) => {
 const bootPaidSession = new URLSearchParams(window.location.search).get('paid_session') || ''
 if (bootPaidSession) window.history.replaceState(null, '', '/')
 
+// Custom mark: a hex nut (automotive/hardware) holding a roofline (home)
+// whose post branches into circuit nodes (technology) — the three trades.
+function LogoMark({ size = 24 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48" fill="none" aria-hidden="true">
+      <path d="M44 24 L34 41.32 L14 41.32 L4 24 L14 6.68 L34 6.68 Z" stroke="currentColor" strokeWidth="2.5" strokeLinejoin="round" />
+      <path d="M11 21 L24 12 L37 21" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M24 15.5 V30.5" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+      <path d="M17.5 25 H30.5" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+      <circle cx="15" cy="25" r="2.2" fill="currentColor" />
+      <circle cx="33" cy="25" r="2.2" fill="currentColor" />
+      <circle cx="24" cy="33.5" r="2.2" fill="currentColor" />
+    </svg>
+  )
+}
+
 function BrandMark({ compact = false }) {
   return (
     <div className={`brand-mark ${compact ? 'brand-mark--compact' : ''}`} aria-label="Travis's Creations">
-      <span className="brand-mark__icon"><Wrench size={compact ? 17 : 21} /></span>
+      <span className="brand-mark__icon"><LogoMark size={compact ? 21 : 26} /></span>
       <span>
         <strong>TRAVIS'S</strong>
         <small>CREATIONS</small>
@@ -146,19 +165,25 @@ function PublicSite({ onSignIn }) {
         </div>
         <div className="service-cards">
           <div className="service-card">
-            <span><Hammer size={22} /></span>
-            <h3>Home & remodel</h3>
-            <p>Repairs, upgrades, installs, and remodel work — planned clearly and done right.</p>
+            <div className="service-card__img"><img src={serviceHome} alt="Remodel work in progress with a drill on site" loading="lazy" /></div>
+            <div className="service-card__body">
+              <h3>Home & remodel</h3>
+              <p>Repairs, upgrades, installs, and remodel work — planned clearly and done right.</p>
+            </div>
           </div>
           <div className="service-card">
-            <span><Wrench size={22} /></span>
-            <h3>Automotive</h3>
-            <p>Diagnostics, brakes, cooling systems, fluid service, and general repair.</p>
+            <div className="service-card__img"><img src={serviceAuto} alt="Engine bay with belts and pulleys during service" loading="lazy" /></div>
+            <div className="service-card__body">
+              <h3>Automotive</h3>
+              <p>Diagnostics, brakes, cooling systems, fluid service, and general repair.</p>
+            </div>
           </div>
           <div className="service-card">
-            <span><Cpu size={22} /></span>
-            <h3>Technology</h3>
-            <p>PC builds and repair, smart home setups, and practical tech support.</p>
+            <div className="service-card__img"><img src={serviceTech} alt="Close-up of a computer circuit board" loading="lazy" /></div>
+            <div className="service-card__body">
+              <h3>Technology</h3>
+              <p>PC builds and repair, smart home setups, and practical tech support.</p>
+            </div>
           </div>
         </div>
       </section>
