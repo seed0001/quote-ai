@@ -263,11 +263,9 @@ function PublicSite({ onSignIn }) {
                 <div className="catalog-items">
                   {catalog.filter((item) => (item.category || 'Services') === category).map((item) => (
                     <div className="catalog-item" key={item.id}>
-                      <div>
-                        <strong>{item.name}</strong>
-                        {item.description && <p>{item.description}</p>}
-                      </div>
+                      <strong>{item.name}</strong>
                       <span>{Number(item.price) > 0 ? <>from <b>{formatCurrency(item.price)}</b>{item.unit ? ` / ${item.unit}` : ''}</> : 'quoted'}</span>
+                      {item.description && <p>{item.description}</p>}
                     </div>
                   ))}
                 </div>
