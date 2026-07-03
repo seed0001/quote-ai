@@ -154,6 +154,48 @@ const aiConfig = () => {
   }
 }
 
+// Some free-tier models never answer — they emit a fixed moderation phrase
+// (e.g. "User Safety: safe"). Detect those replies and silently re-query so
+// the visitor never sees the failure; the router usually rotates to a
+// different model on retry. Phrases are editable in admin AI settings.
+const DEFAULT_BAD_REPLIES = 'User Safety: safe'
+
+const badReplyPatterns = () => {
+  const raw = getBusiness().aiBadReplies
+  const source = raw === undefined || raw === null || raw === '' ? DEFAULT_BAD_REPLIES : String(raw)
+  return source.split(/\r?\n/).map((s) => s.trim().toLowerCase()).filter(Boolean)
+}
+
+const isBadReply = (text) => {
+  const trimmed = String(text || '').trim()
+  if (!trimmed) return true
+  const lower = trimmed.toLowerCase()
+  return badReplyPatterns().some((phrase) => lower.includes(phrase))
+}
+
+const callOpenRouter = async (model, messages, attempts = 3) => {
+  let lastError = 'The assistant is temporarily unavailable.'
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const orRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${OPENROUTER_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, messages }),
+      })
+      const data = await orRes.json().catch(() => ({}))
+      if (!orRes.ok) {
+        lastError = data.error?.message || lastError
+        continue
+      }
+      const reply = data.choices?.[0]?.message?.content || ''
+      if (!isBadReply(reply)) return { ok: true, reply }
+    } catch (error) {
+      lastError = error.message
+    }
+  }
+  return { ok: false, error: lastError }
+}
+
 const requireSync = (req, res, next) => {
   const auth = req.headers.authorization || ''
   const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : ''
@@ -247,21 +289,13 @@ app.post('/api/public/chat', async (req, res) => {
     'Be warm, plain-spoken, and concise — a couple of short paragraphs at most. Never discuss anything unrelated to this business and its services.',
   ].filter(Boolean).join('\n\n')
 
-  try {
-    const orRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${OPENROUTER_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: ai.model, messages: [{ role: 'system', content: system }, ...history] }),
-    })
-    const data = await orRes.json().catch(() => ({}))
-    if (!orRes.ok) {
-      res.status(502).json({ error: data.error?.message || 'The assistant is temporarily unavailable.' })
-      return
-    }
-    res.json({ reply: data.choices?.[0]?.message?.content || '' })
-  } catch (error) {
-    res.status(502).json({ error: `Assistant error: ${error.message}` })
+  const result = await callOpenRouter(ai.model, [{ role: 'system', content: system }, ...history])
+  if (result.ok) {
+    res.json({ reply: result.reply })
+    return
   }
+  // Every attempt failed — degrade gracefully instead of surfacing an error.
+  res.json({ reply: "I'm having a little trouble answering right now. The quote request form below the catalog goes straight to the team — describe what you need there and a real person will get back to you shortly." })
 })
 
 app.post('/api/public/lead', (req, res) => {
@@ -442,6 +476,7 @@ app.get('/api/admin/ai-settings', requireAdmin, (_req, res) => {
     publicHourly: ai.publicHourly,
     publicDaily: ai.publicDaily,
     clientHourly: ai.clientHourly,
+    badReplies: getBusiness().aiBadReplies ?? DEFAULT_BAD_REPLIES,
     keyConfigured: Boolean(OPENROUTER_KEY),
   })
 })
@@ -455,6 +490,7 @@ app.put('/api/admin/ai-settings', requireAdmin, (req, res) => {
   setBusiness({
     aiModel: String(body.model || '').trim().slice(0, 120),
     aiPersona: String(body.persona || '').trim().slice(0, 2000),
+    aiBadReplies: String(body.badReplies ?? DEFAULT_BAD_REPLIES).slice(0, 2000),
     publicChatHourly: clampLimit(body.publicHourly, PUBLIC_CHAT_LIMIT_PER_HOUR, 500),
     publicChatDaily: clampLimit(body.publicDaily, PUBLIC_CHAT_DAILY_GLOBAL, 20000),
     clientChatHourly: clampLimit(body.clientHourly, CHAT_LIMIT_PER_HOUR, 500),
@@ -523,21 +559,12 @@ app.post('/api/chat', requireClient, async (req, res) => {
     'You cannot make changes, commitments, quotes, or bookings. When the client needs action or a promise, tell them to use the Messages tab so the team is notified.',
   ].filter(Boolean).join('\n\n')
 
-  try {
-    const orRes = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${OPENROUTER_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: ai.model, messages: [{ role: 'system', content: system }, ...history] }),
-    })
-    const data = await orRes.json().catch(() => ({}))
-    if (!orRes.ok) {
-      res.status(502).json({ error: data.error?.message || 'The assistant is temporarily unavailable.' })
-      return
-    }
-    res.json({ reply: data.choices?.[0]?.message?.content || '' })
-  } catch (error) {
-    res.status(502).json({ error: `Assistant error: ${error.message}` })
+  const result = await callOpenRouter(ai.model, [{ role: 'system', content: system }, ...history])
+  if (result.ok) {
+    res.json({ reply: result.reply })
+    return
   }
+  res.json({ reply: "I'm having a little trouble answering right now. Use the Messages tab and the team will get back to you directly." })
 })
 
 // ---- Stripe milestone payments ----------------------------------------------

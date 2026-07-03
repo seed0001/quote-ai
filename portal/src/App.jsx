@@ -805,6 +805,17 @@ function AdminAiSettings() {
           <small>Sets the assistant's voice on both the public site and the client portal.</small>
         </label>
 
+        <label>
+          <span>Blocked reply phrases (one per line)</span>
+          <textarea
+            rows={3}
+            value={form.badReplies}
+            onChange={setField('badReplies')}
+            placeholder={'User Safety: safe'}
+          />
+          <small>If a model's answer contains one of these phrases, the portal silently re-asks (up to 3 tries). Use this to catch free models that reply with a canned string instead of answering.</small>
+        </label>
+
         <div className="ai-settings__limits">
           <label>
             <span>Public: messages / visitor / hour</span>
