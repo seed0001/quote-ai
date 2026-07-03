@@ -152,7 +152,7 @@ const ACTION_SCHEMA = `Available Actions Schema:
 
 // Build the compact DB snapshot the model reasons over. Mirrors the prior
 // inline context-builder so the model sees the same shape it always has.
-export function buildContext({ projects, clients, contacts = [], catalog, tasks = [], knowledgeBase = [], aiMemory = [], activeProjectId, currentView, settings = {} }) {
+export function buildContext({ projects, clients, contacts = [], catalog, tasks = [], knowledgeBase = [], aiMemory = [], websiteAnalytics = null, activeProjectId, currentView, settings = {} }) {
   const clientsCtx = clients.map(c => ({
     id: c.id,
     name: c.name,
@@ -218,7 +218,26 @@ export function buildContext({ projects, clients, contacts = [], catalog, tasks 
     shortTerm: aiMemory.filter(m => m.type === 'short').sort(byNewest).slice(0, 20).reverse().map(memoryEntry),
   };
 
+  // Live numbers from the public website (visitors, AI advisor chats, quote
+  // requests). Present when the cloud portal is connected and reachable.
+  let websiteAnalyticsCtx = 'Website analytics unavailable right now.'
+  if (websiteAnalytics && websiteAnalytics.totals) {
+    const today = new Date().toISOString().slice(0, 10)
+    const todayRow = (websiteAnalytics.daily || []).find(d => d.day === today);
+    websiteAnalyticsCtx = {
+      windowDays: websiteAnalytics.days,
+      today: { date: today, pageViews: todayRow?.views || 0, uniqueVisitors: todayRow?.visitors || 0 },
+      totals: websiteAnalytics.totals,
+      last7Days: (websiteAnalytics.daily || []).slice(-7),
+      topPages: websiteAnalytics.topPaths || [],
+      recentAiConversations: (websiteAnalytics.recentAiChats || []).slice(0, 12).map(c => ({
+        when: c.ts, who: c.type === 'client_chat' ? `client: ${c.visitor}` : 'site visitor', said: c.text
+      })),
+    };
+  }
+
   return {
+    websiteAnalytics: websiteAnalyticsCtx,
     businessProfile: {
       companyName: settings.companyName || 'My Business',
       businessType: settings.businessType || 'General products and services',

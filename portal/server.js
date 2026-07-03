@@ -760,6 +760,19 @@ app.get('/api/sync/pull', requireSync, (req, res) => {
   })
 })
 
+// Live analytics feed for the hub's AI — same numbers as the admin dashboard.
+app.get('/api/sync/analytics', requireSync, (req, res) => {
+  const days = Math.min(Math.max(Number(req.query.days) || 30, 7), 90)
+  res.json(getAnalytics(days))
+})
+
+// One-time cleanup of development/test artifacts (admin only).
+app.post('/api/admin/purge-test-data', requireAdmin, (_req, res) => {
+  const leads = db.prepare("DELETE FROM leads WHERE name LIKE '%from Claude%'").run()
+  const events = db.prepare("DELETE FROM events WHERE visitor = 'v-claudetest' OR (type = 'ai_chat' AND visitor NOT LIKE 'v-%')").run()
+  res.json({ ok: true, leadsRemoved: leads.changes, eventsRemoved: events.changes })
+})
+
 app.post('/api/sync/ack', requireSync, (req, res) => {
   const messageIds = Array.isArray(req.body?.messageIds) ? req.body.messageIds : []
   const paymentIds = Array.isArray(req.body?.paymentIds) ? req.body.paymentIds : []

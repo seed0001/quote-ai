@@ -930,6 +930,34 @@ const hostConfigPlugin = {
         sendJson(res, 500, { error: error.message })
       }
     })
+    // Live website analytics for the AI and dashboards. Cached for 60s so
+    // chatty AI turns don't hammer the portal.
+    let analyticsCache = { at: 0, data: null }
+    server.middlewares.use('/api/portal-analytics', async (req, res) => {
+      const config = readHostConfig()
+      const baseUrl = String(config.portalUrl || '').trim().replace(/\/+$/, '')
+      const key = String(config.portalSyncKey || '').trim()
+      if (!baseUrl || !key) {
+        sendJson(res, 200, { configured: false })
+        return
+      }
+      if (analyticsCache.data && Date.now() - analyticsCache.at < 60_000) {
+        sendJson(res, 200, analyticsCache.data)
+        return
+      }
+      try {
+        const response = await fetch(`${baseUrl}/api/sync/analytics?days=30`, {
+          headers: { Authorization: `Bearer ${key}` },
+        })
+        if (!response.ok) throw new Error(`Portal analytics failed (${response.status})`)
+        const data = { configured: true, ...(await response.json()) }
+        analyticsCache = { at: Date.now(), data }
+        sendJson(res, 200, data)
+      } catch (error) {
+        sendJson(res, 502, { configured: true, error: error.message })
+      }
+    })
+
     // Trigger a cloud-portal sync now (employees may use this; it only pushes
     // data that is already marked portal-visible).
     server.middlewares.use('/api/portal-sync', async (req, res) => {

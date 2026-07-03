@@ -311,7 +311,21 @@ export default function AIChat({
         return { role: m.sender === 'user' ? 'user' : 'assistant', content };
       });
 
-    const context = buildContext({ projects, clients, contacts, knowledgeBase, aiMemory, catalog, tasks, activeProjectId, currentView, settings });
+    // Pull live website analytics (60s server cache) so the assistant can
+    // answer traffic and AI-usage questions in real time. Never blocks a turn.
+    let websiteAnalytics = null;
+    try {
+      const analyticsRes = await Promise.race([
+        fetch('/api/portal-analytics'),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000)),
+      ]);
+      if (analyticsRes.ok) {
+        const data = await analyticsRes.json();
+        if (data.configured && data.totals) websiteAnalytics = data;
+      }
+    } catch { /* portal offline — the AI just says analytics are unavailable */ }
+
+    const context = buildContext({ projects, clients, contacts, knowledgeBase, aiMemory, websiteAnalytics, catalog, tasks, activeProjectId, currentView, settings });
 
     setIsLoading(true);
     setLoadingPhase('reasoning');
