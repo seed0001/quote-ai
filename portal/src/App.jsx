@@ -5,6 +5,7 @@ import {
   CalendarDays,
   Check,
   CheckCircle2,
+  ChevronDown,
   Circle,
   Clock3,
   Cpu,
@@ -230,6 +231,7 @@ function PublicSite({ onSignIn }) {
   const [leadDone, setLeadDone] = useState(false)
   const [leadError, setLeadError] = useState('')
   const [selection, setSelection] = useState({}) // catalog item id -> quantity
+  const [openCategories, setOpenCategories] = useState(() => new Set())
 
   useEffect(() => {
     fetch('/api/public/site')
@@ -242,6 +244,24 @@ function PublicSite({ onSignIn }) {
   const catalog = site?.catalog || []
   const posts = site?.posts || []
   const categories = [...new Set(catalog.map((item) => item.category || 'Services'))]
+  const catalogByCategory = categories.map((category) => ({
+    name: category,
+    items: catalog.filter((item) => (item.category || 'Services') === category),
+  }))
+
+  const toggleCategory = (category) => {
+    setOpenCategories((current) => {
+      const next = new Set(current)
+      if (next.has(category)) next.delete(category)
+      else next.add(category)
+      return next
+    })
+  }
+
+  const allCategoriesOpen = categories.length > 0 && categories.every((category) => openCategories.has(category))
+  const toggleAllCategories = () => {
+    setOpenCategories(allCategoriesOpen ? new Set() : new Set(categories))
+  }
 
   useEffect(() => {
     trackPageview(page === 'workshop' ? '/workshop' : '/')
@@ -394,12 +414,51 @@ function PublicSite({ onSignIn }) {
           <p>Real rates from our live catalog. Add the services you need to build a quote request, then tell us about your project below — we'll follow up with a written quote.</p>
         </div>
         {catalog.length ? (
-          <div className="catalog-groups">
-            {categories.map((category) => (
-              <div className="catalog-group" key={category}>
-                <h3>{category}</h3>
-                <div className="catalog-items">
-                  {catalog.filter((item) => (item.category || 'Services') === category).map((item) => (
+          <div className="catalog-browser">
+            <div className="catalog-browser__summary">
+              <div>
+                <strong>{catalog.length} services</strong>
+                <span>organized into {categories.length} {categories.length === 1 ? 'category' : 'categories'}</span>
+              </div>
+              <button type="button" onClick={toggleAllCategories}>
+                {allCategoriesOpen ? 'Collapse all' : 'Explore all'}
+              </button>
+            </div>
+            <div className="catalog-groups">
+            {catalogByCategory.map(({ name: category, items }) => {
+              const isOpen = openCategories.has(category)
+              const selectedCount = items.filter((item) => selection[item.id]).length
+              const pricedItems = items.filter((item) => Number(item.price) > 0)
+              const startingPrice = pricedItems.length
+                ? Math.min(...pricedItems.map((item) => Number(item.price)))
+                : null
+              const panelId = `catalog-${category.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`
+
+              return (
+              <section className={`catalog-group${isOpen ? ' catalog-group--open' : ''}`} key={category}>
+                <button
+                  className="catalog-group__trigger"
+                  type="button"
+                  onClick={() => toggleCategory(category)}
+                  aria-expanded={isOpen}
+                  aria-controls={panelId}
+                >
+                  <span className="catalog-group__title">
+                    <span className="catalog-group__icon">{category.charAt(0).toUpperCase()}</span>
+                    <span>
+                      <strong>{category}</strong>
+                      <small>{items.length} {items.length === 1 ? 'service' : 'services'}</small>
+                    </span>
+                  </span>
+                  <span className="catalog-group__meta">
+                    {selectedCount > 0 && <b><Check size={12} /> {selectedCount} selected</b>}
+                    <small>{startingPrice === null ? 'Custom quotes' : `From ${formatCurrency(startingPrice)}`}</small>
+                    <ChevronDown size={20} />
+                  </span>
+                </button>
+                <div className="catalog-group__panel" id={panelId} hidden={!isOpen}>
+                  <div className="catalog-items">
+                  {items.map((item) => (
                     <div className="catalog-item" key={item.id}>
                       <strong>{item.name}</strong>
                       <span>{Number(item.price) > 0 ? <>from <b>{formatCurrency(item.price)}</b>{item.unit ? ` / ${item.unit}` : ''}</> : 'quoted'}</span>
@@ -417,9 +476,12 @@ function PublicSite({ onSignIn }) {
                       </div>
                     </div>
                   ))}
+                  </div>
                 </div>
-              </div>
-            ))}
+              </section>
+              )
+            })}
+            </div>
           </div>
         ) : (
           <p className="catalog-empty">Our full rate list is being published — tell us what you need below and we'll quote it.</p>
