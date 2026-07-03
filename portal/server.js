@@ -19,6 +19,8 @@ import {
   setBusiness,
   projectsForClient,
   messagesForClient,
+  getCatalog,
+  replaceCatalog,
 } from './db.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -131,6 +133,41 @@ const requireSync = (req, res, next) => {
   }
   next()
 }
+
+// ============================================================================
+// PUBLIC SITE (no auth) — marketing pages, service catalog, quote requests
+// ============================================================================
+app.get('/api/public/site', (_req, res) => {
+  const business = getBusiness()
+  res.json({
+    business: {
+      companyName: business.companyName || "Travis's Creations",
+      businessDescription: business.businessDescription || '',
+      email: business.email || '',
+      phone: business.phone || '',
+    },
+    catalog: getCatalog(),
+  })
+})
+
+app.post('/api/public/lead', (req, res) => {
+  if (limited(`lead:${req.ip}`, 5, 60 * 60 * 1000)) {
+    res.status(429).json({ error: 'Too many requests from this connection. Please try again later or email us directly.' })
+    return
+  }
+  const name = String(req.body?.name || '').trim().slice(0, 200)
+  const email = String(req.body?.email || '').trim().slice(0, 200)
+  const phone = String(req.body?.phone || '').trim().slice(0, 60)
+  const interest = String(req.body?.interest || '').trim().slice(0, 200)
+  const message = String(req.body?.message || '').trim().slice(0, 4000)
+  if (!name || (!email && !phone)) {
+    res.status(400).json({ error: 'Please include your name and an email or phone number so we can reach you.' })
+    return
+  }
+  db.prepare('INSERT INTO leads (id, name, email, phone, interest, message, created_at, synced) VALUES (?, ?, ?, ?, ?, ?, ?, 0)')
+    .run(newId('lead'), name, email, phone, interest, message, new Date().toISOString())
+  res.json({ ok: true })
+})
 
 // ============================================================================
 // CLIENT AUTH
@@ -453,12 +490,17 @@ app.post('/api/verify-payment', requireClient, async (req, res) => {
 // PULLS new messages/payments back — the portal never initiates connections.
 // ============================================================================
 app.post('/api/sync/publish', requireSync, (req, res) => {
-  const { business, clients, projects, replies } = req.body || {}
+  const { business, clients, projects, replies, catalog } = req.body || {}
   const now = new Date().toISOString()
-  const summary = { clients: 0, projects: 0, replies: 0 }
+  const summary = { clients: 0, projects: 0, replies: 0, catalog: 0 }
 
   const tx = db.transaction(() => {
     if (business && typeof business === 'object') setBusiness(business)
+
+    if (Array.isArray(catalog)) {
+      replaceCatalog(catalog)
+      summary.catalog = catalog.length
+    }
 
     for (const c of Array.isArray(clients) ? clients : []) {
       if (!c?.id || !c?.email || !c?.name) continue
@@ -535,18 +577,21 @@ app.get('/api/sync/pull', requireSync, (req, res) => {
   res.json({
     messages: db.prepare("SELECT id, client_id AS clientId, text, created_at AS timestamp FROM messages WHERE sender = 'client' AND synced = 0 ORDER BY created_at ASC").all(),
     payments: db.prepare('SELECT id, client_id AS clientId, project_id AS projectId, milestone_id AS milestoneId, amount, stripe_session AS stripeSession, paid_at AS paidAt FROM payments WHERE synced = 0 ORDER BY paid_at ASC').all(),
+    leads: db.prepare('SELECT id, name, email, phone, interest, message, created_at AS createdAt FROM leads WHERE synced = 0 ORDER BY created_at ASC').all(),
   })
 })
 
 app.post('/api/sync/ack', requireSync, (req, res) => {
   const messageIds = Array.isArray(req.body?.messageIds) ? req.body.messageIds : []
   const paymentIds = Array.isArray(req.body?.paymentIds) ? req.body.paymentIds : []
+  const leadIds = Array.isArray(req.body?.leadIds) ? req.body.leadIds : []
   const tx = db.transaction(() => {
     for (const id of messageIds) db.prepare('UPDATE messages SET synced = 1 WHERE id = ?').run(String(id))
     for (const id of paymentIds) db.prepare('UPDATE payments SET synced = 1 WHERE id = ?').run(String(id))
+    for (const id of leadIds) db.prepare('UPDATE leads SET synced = 1 WHERE id = ?').run(String(id))
   })
   tx()
-  res.json({ ok: true, acked: messageIds.length + paymentIds.length })
+  res.json({ ok: true, acked: messageIds.length + paymentIds.length + leadIds.length })
 })
 
 app.get('/api/health', (req, res) => {

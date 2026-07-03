@@ -62,6 +62,25 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT
   );
+  CREATE TABLE IF NOT EXISTS catalog (
+    id TEXT PRIMARY KEY,            -- matches the hub's catalog item id
+    name TEXT NOT NULL,
+    category TEXT DEFAULT '',
+    unit TEXT DEFAULT '',
+    price REAL DEFAULT 0,
+    description TEXT DEFAULT '',
+    updated_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS leads (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    email TEXT DEFAULT '',
+    phone TEXT DEFAULT '',
+    interest TEXT DEFAULT '',
+    message TEXT DEFAULT '',
+    created_at TEXT NOT NULL,
+    synced INTEGER DEFAULT 0        -- picked up by the hub yet?
+  );
   CREATE TABLE IF NOT EXISTS admins (
     id TEXT PRIMARY KEY,
     email TEXT UNIQUE NOT NULL,
@@ -181,3 +200,21 @@ export const projectsForClient = (clientId) =>
 
 export const messagesForClient = (clientId) =>
   db.prepare('SELECT id, sender, text, created_at FROM messages WHERE client_id = ? ORDER BY created_at ASC').all(clientId)
+
+// ---- Public catalog (published by the hub) ---------------------------------
+export const getCatalog = () =>
+  db.prepare('SELECT id, name, category, unit, price, description FROM catalog ORDER BY category COLLATE NOCASE, name COLLATE NOCASE').all()
+
+// The hub's catalog is the source of truth — each publish replaces the set.
+export const replaceCatalog = (items) => {
+  const now = new Date().toISOString()
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM catalog').run()
+    const insert = db.prepare('INSERT INTO catalog (id, name, category, unit, price, description, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    for (const item of items) {
+      if (!item?.id || !item?.name) continue
+      insert.run(item.id, item.name, item.category || '', item.unit || '', Number(item.price) || 0, item.description || '', now)
+    }
+  })
+  tx()
+}

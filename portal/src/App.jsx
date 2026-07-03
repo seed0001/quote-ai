@@ -73,7 +73,197 @@ function ServiceStrip() {
   )
 }
 
-function Login({ email, setEmail, password, setPassword, error, busy, onSubmit, googleEnabled, googleButtonRef }) {
+function PublicSite({ onSignIn }) {
+  const [site, setSite] = useState(null)
+  const [lead, setLead] = useState({ name: '', email: '', phone: '', interest: '', message: '' })
+  const [leadBusy, setLeadBusy] = useState(false)
+  const [leadDone, setLeadDone] = useState(false)
+  const [leadError, setLeadError] = useState('')
+
+  useEffect(() => {
+    fetch('/api/public/site')
+      .then((response) => response.json())
+      .then(setSite)
+      .catch(() => setSite({ business: {}, catalog: [] }))
+  }, [])
+
+  const business = site?.business || {}
+  const catalog = site?.catalog || []
+  const categories = [...new Set(catalog.map((item) => item.category || 'Services'))]
+
+  const setField = (field) => (event) => setLead((current) => ({ ...current, [field]: event.target.value }))
+
+  const submitLead = async (event) => {
+    event.preventDefault()
+    if (leadBusy) return
+    setLeadBusy(true)
+    setLeadError('')
+    try {
+      const response = await fetch('/api/public/lead', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(lead),
+      })
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || 'Something went wrong — please try again.')
+      setLeadDone(true)
+    } catch (error) {
+      setLeadError(error.message)
+    } finally {
+      setLeadBusy(false)
+    }
+  }
+
+  return (
+    <div className="site-shell">
+      <header className="site-header">
+        <BrandMark compact />
+        <nav className="site-nav">
+          <a href="#services">Services</a>
+          <a href="#catalog">Pricing</a>
+          <a href="#quote">Request a quote</a>
+        </nav>
+        <button className="site-signin" onClick={onSignIn}><LockKeyhole size={15} /> Client sign in</button>
+      </header>
+
+      <section className="site-hero" style={{ backgroundImage: `url(${workshopHero})` }}>
+        <div className="site-hero__shade" />
+        <div className="site-hero__content">
+          <span className="eyebrow eyebrow--light">Built. Fixed. Connected.</span>
+          <h1>One capable partner.<br />Whatever the project.</h1>
+          <p>{business.businessDescription || 'Handyman, automotive, and technology services — one partner from the first conversation to the final handoff.'}</p>
+          <div className="site-hero__actions">
+            <a className="hero-action hero-action--inline" href="#quote">Request a free quote <ArrowRight size={18} /></a>
+            <ServiceStrip />
+          </div>
+        </div>
+      </section>
+
+      <section className="site-section" id="services">
+        <div className="site-section__head">
+          <span className="eyebrow">What we do</span>
+          <h2>Three trades. One standard of work.</h2>
+        </div>
+        <div className="service-cards">
+          <div className="service-card">
+            <span><Hammer size={22} /></span>
+            <h3>Home & remodel</h3>
+            <p>Repairs, upgrades, installs, and remodel work — planned clearly and done right.</p>
+          </div>
+          <div className="service-card">
+            <span><Wrench size={22} /></span>
+            <h3>Automotive</h3>
+            <p>Diagnostics, brakes, cooling systems, fluid service, and general repair.</p>
+          </div>
+          <div className="service-card">
+            <span><Cpu size={22} /></span>
+            <h3>Technology</h3>
+            <p>PC builds and repair, smart home setups, and practical tech support.</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="site-section site-section--alt" id="catalog">
+        <div className="site-section__head">
+          <span className="eyebrow">Straightforward pricing</span>
+          <h2>Services & rates</h2>
+          <p>Real rates from our live catalog — every job gets a written quote before work begins.</p>
+        </div>
+        {catalog.length ? (
+          <div className="catalog-groups">
+            {categories.map((category) => (
+              <div className="catalog-group" key={category}>
+                <h3>{category}</h3>
+                <div className="catalog-items">
+                  {catalog.filter((item) => (item.category || 'Services') === category).map((item) => (
+                    <div className="catalog-item" key={item.id}>
+                      <div>
+                        <strong>{item.name}</strong>
+                        {item.description && <p>{item.description}</p>}
+                      </div>
+                      <span>{Number(item.price) > 0 ? <>from <b>{formatCurrency(item.price)}</b>{item.unit ? ` / ${item.unit}` : ''}</> : 'quoted'}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="catalog-empty">Our full rate list is being published — tell us what you need below and we'll quote it.</p>
+        )}
+      </section>
+
+      <section className="site-section" id="quote">
+        <div className="lead-panel">
+          <div className="lead-panel__pitch">
+            <span className="eyebrow">Start a project</span>
+            <h2>Tell us what you need.</h2>
+            <p>Describe the job and how to reach you. You'll hear back with next steps and a clear quote — no obligation.</p>
+            <div className="contact-details">
+              {business.phone && <a href={`tel:${business.phone}`}><Phone size={15} /> {business.phone}</a>}
+              {business.email && <a href={`mailto:${business.email}`}><Mail size={15} /> {business.email}</a>}
+              <span><MapPin size={15} /> Oklahoma</span>
+            </div>
+          </div>
+
+          {leadDone ? (
+            <div className="lead-success">
+              <CheckCircle2 size={30} />
+              <h3>Request received.</h3>
+              <p>Thanks, {lead.name.split(' ')[0] || 'friend'} — we'll reach out shortly to talk through your project.</p>
+            </div>
+          ) : (
+            <form className="lead-form" onSubmit={submitLead}>
+              <label className="field">
+                <span>Your name</span>
+                <div className="field__control"><Users size={17} /><input value={lead.name} onChange={setField('name')} placeholder="Jane Smith" required /></div>
+              </label>
+              <div className="lead-form__row">
+                <label className="field">
+                  <span>Email</span>
+                  <div className="field__control"><Mail size={17} /><input type="email" value={lead.email} onChange={setField('email')} placeholder="you@example.com" /></div>
+                </label>
+                <label className="field">
+                  <span>Phone</span>
+                  <div className="field__control"><Phone size={17} /><input value={lead.phone} onChange={setField('phone')} placeholder="(555) 555-0100" /></div>
+                </label>
+              </div>
+              <label className="field">
+                <span>What do you need?</span>
+                <div className="field__control">
+                  <Wrench size={17} />
+                  <select value={lead.interest} onChange={setField('interest')}>
+                    <option value="">Choose a service…</option>
+                    {(categories.length ? categories : ['Home & remodel', 'Automotive', 'Technology']).map((category) => (
+                      <option key={category} value={category}>{category}</option>
+                    ))}
+                    <option value="Something else">Something else</option>
+                  </select>
+                </div>
+              </label>
+              <label className="field">
+                <span>Tell us about the job</span>
+                <textarea className="lead-form__message" value={lead.message} onChange={setField('message')} rows={4} placeholder="What's going on, and when do you need it done?" />
+              </label>
+              {leadError && <div className="form-error">{leadError}</div>}
+              <button className="primary-action" type="submit" disabled={leadBusy}>
+                {leadBusy ? <LoaderCircle className="spin" size={18} /> : <>Send my request <Send size={17} /></>}
+              </button>
+            </form>
+          )}
+        </div>
+      </section>
+
+      <footer className="site-footer">
+        <BrandMark compact />
+        <p>Craftsmanship meets practical technology.</p>
+        <span>© {new Date().getFullYear()} {business.companyName || "Travis's Creations"}</span>
+      </footer>
+    </div>
+  )
+}
+
+function Login({ email, setEmail, password, setPassword, error, busy, onSubmit, googleEnabled, googleButtonRef, onBack }) {
   return (
     <main className="login-page">
       <section className="login-story" style={{ backgroundImage: `url(${workshopHero})` }}>
@@ -96,6 +286,7 @@ function Login({ email, setEmail, password, setPassword, error, busy, onSubmit, 
 
       <section className="login-access">
         <div className="mobile-brand"><BrandMark /></div>
+        <button type="button" className="login-back" onClick={onBack}>← Back to the website</button>
         <form className="login-card" onSubmit={onSubmit}>
           <span className="eyebrow">Private client access</span>
           <h2>Welcome back.</h2>
@@ -427,7 +618,9 @@ export default function App() {
     try {
       const response = await fetch('/api/session', { cache: 'no-store' })
       if (response.status === 401) {
-        setPhase('login')
+        // Not signed in: visitors get the public website. A pending Stripe
+        // redirect still goes to the login screen so the payment can verify.
+        setPhase(pendingPaidSession.current ? 'login' : 'public')
         return
       }
       const data = await response.json()
@@ -435,7 +628,7 @@ export default function App() {
       setSession(data)
       setPhase('ready')
     } catch {
-      setPhase('login')
+      setPhase('public')
     }
   }, [])
 
@@ -566,7 +759,7 @@ export default function App() {
     await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {})
     setSession(null)
     setChatHistory([])
-    setPhase('login')
+    setPhase('public')
   }
 
   const sendMessage = async (event) => {
@@ -634,8 +827,12 @@ export default function App() {
     return <div className="loading-screen"><BrandMark /><LoaderCircle className="spin" size={24} /><p>Opening your project portal…</p></div>
   }
 
+  if (phase === 'public') {
+    return <PublicSite onSignIn={() => setPhase('login')} />
+  }
+
   if (phase === 'login') {
-    return <Login {...{ email, setEmail, password, setPassword, error: loginError, busy: loggingIn, onSubmit: handleLogin, googleEnabled: googleConfig.googleEnabled, googleButtonRef }} />
+    return <Login {...{ email, setEmail, password, setPassword, error: loginError, busy: loggingIn, onSubmit: handleLogin, googleEnabled: googleConfig.googleEnabled, googleButtonRef, onBack: () => setPhase('public') }} />
   }
 
   if (session?.role === 'admin') {

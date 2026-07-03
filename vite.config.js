@@ -417,6 +417,16 @@ const runPortalSync = async () => {
         projects,
         fullProjectList: true,
         replies: replies.map((r) => ({ id: r.id, clientId: r.clientId, text: r.text, timestamp: r.timestamp })),
+        // Public website catalog: client-safe fields only (never `store`,
+        // which records where materials are sourced).
+        catalog: readCollection('catalog').map((item) => ({
+          id: item.id,
+          name: item.name,
+          category: item.category || '',
+          unit: item.unit || '',
+          price: Number(item.price) || 0,
+          description: item.description || '',
+        })),
       }),
     })
     if (!publishRes.ok) {
@@ -486,14 +496,46 @@ const runPortalSync = async () => {
       if (changed) writeCollection('projects', allProjects)
     }
 
+    // Website quote requests become tasks so they show up in the daily
+    // workflow (Calendar & Tasks) and trigger an owner email.
+    const incomingLeads = Array.isArray(pulled.leads) ? pulled.leads : []
+    if (incomingLeads.length > 0) {
+      const tasks = readCollection('tasks')
+      const known = new Set(tasks.map((t) => t.id))
+      let changed = false
+      for (const lead of incomingLeads) {
+        const taskId = `task-lead-${lead.id}`
+        if (known.has(taskId)) continue
+        const contact = [lead.email, lead.phone].filter(Boolean).join(' · ')
+        tasks.push({
+          id: taskId,
+          title: `New website lead: ${lead.name}`,
+          description: `${lead.interest ? `Interested in: ${lead.interest}\n` : ''}${contact ? `Contact: ${contact}\n` : ''}${lead.message || ''}`.trim(),
+          status: 'todo',
+          date: String(lead.createdAt || '').slice(0, 10),
+          projectId: '',
+          clientId: '',
+        })
+        changed = true
+        notifyOwner(config, `New website lead: ${lead.name}`,
+          `<p><strong>${escapeHtml(lead.name)}</strong> requested a quote through the website.</p>
+           ${lead.interest ? `<p>Interested in: <strong>${escapeHtml(lead.interest)}</strong></p>` : ''}
+           ${contact ? `<p>Contact: ${escapeHtml(contact)}</p>` : ''}
+           ${lead.message ? `<p>${escapeHtml(lead.message)}</p>` : ''}`)
+        summary.newLeads = (summary.newLeads || 0) + 1
+      }
+      if (changed) writeCollection('tasks', tasks)
+    }
+
     // ---- ACK ---- (only after the pulled records are safely written locally)
-    if (incomingMessages.length > 0 || incomingPayments.length > 0) {
+    if (incomingMessages.length > 0 || incomingPayments.length > 0 || incomingLeads.length > 0) {
       await fetch(`${baseUrl}/api/sync/ack`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
           messageIds: incomingMessages.map((m) => m.id),
           paymentIds: incomingPayments.map((p) => p.id),
+          leadIds: incomingLeads.map((l) => l.id),
         }),
       })
     }
