@@ -375,9 +375,12 @@ async function callOpenRouter({ systemPrompt, history, userMessage, settings, cl
       chatResult = await postChat(messages, settings, true, activeClassifierModel);
     } catch (err) {
       const modelToFallBack = activeClassifierModel || settings.openRouterModel;
-      const isModelErr = err.message?.startsWith('MODEL_NOT_FOUND:') || err.message?.toLowerCase().includes('model');
-      if (isModelErr && modelToFallBack !== 'google/gemini-2.0-flash-lite:free') {
-        console.warn(`Model ${modelToFallBack} not found, falling back to google/gemini-2.0-flash-lite:free.`);
+      
+      // If ANY model error occurs (rate limits, not found, server error, etc.)
+      // and we are not already on the fallback model, automatically heal!
+      if (modelToFallBack !== 'google/gemini-2.0-flash-lite:free') {
+        console.warn(`Model ${modelToFallBack} failed with error: "${err.message}". Falling back to google/gemini-2.0-flash-lite:free...`);
+        
         if (activeClassifierModel) {
           settings.openRouterClassifierModel = 'google/gemini-2.0-flash-lite:free';
           activeClassifierModel = 'google/gemini-2.0-flash-lite:free';
@@ -387,6 +390,7 @@ async function callOpenRouter({ systemPrompt, history, userMessage, settings, cl
         if (settings.openRouterVisionModel) {
           settings.openRouterVisionModel = 'google/gemini-2.0-flash-lite:free';
         }
+        
         try {
           saveSettings(settings);
           await fetch('/api/host-config', {
@@ -397,16 +401,14 @@ async function callOpenRouter({ systemPrompt, history, userMessage, settings, cl
         } catch (saveErr) {
           console.error("Failed to save fallback settings", saveErr);
         }
-        attempt--; // Retry this attempt with the new model
+        
+        attempt--; // Retry this attempt with the fallback model
         isContinuation = false;
         continue;
       }
-      lastError = err;
-      isContinuation = false;
-      console.warn(`Provider error on attempt ${attempt}:`, err);
-      // Wait before retry to handle rate limits or transient errors
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      continue;
+      
+      // If we are already on the fallback model and it fails, throw the API error immediately
+      throw err;
     }
 
     const { content, finishReason } = chatResult;
