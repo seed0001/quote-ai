@@ -17,7 +17,8 @@ import {
   BookUser,
   Cpu,
   BookOpen,
-  Newspaper
+  Newspaper,
+  Brain
 } from 'lucide-react';
 import { playClick, setSoundVolume, setSoundEnabled, setSoundPack } from './utils/soundEngine';
 import {
@@ -40,7 +41,9 @@ import {
   getPortalMessages,
   savePortalMessages,
   getSitePosts,
-  saveSitePosts
+  saveSitePosts,
+  getAiMemory,
+  saveAiMemory
 } from './utils/dataStore';
 import Dashboard from './components/Dashboard';
 import ClientDirectory from './components/ClientDirectory';
@@ -51,6 +54,7 @@ import QuoteBuilder from './components/QuoteBuilder';
 import ProjectDetail from './components/ProjectDetail';
 import SettingsView from './components/SettingsView';
 import SitePosts from './components/SitePosts';
+import MemoryCenter from './components/MemoryCenter';
 
 import AIChat from './components/AIChat';
 import PriceCatalog from './components/PriceCatalog';
@@ -69,6 +73,7 @@ export default function App() {
   const [tasks, setTasks] = useState([]);
   const [portalMessages, setPortalMessages] = useState([]);
   const [sitePosts, setSitePosts] = useState([]);
+  const [aiMemory, setAiMemory] = useState([]);
   const [activeProjectId, setActiveProjectId] = useState(null);
   const [theme, setTheme] = useState('dark');
 
@@ -85,6 +90,7 @@ export default function App() {
     setTasks(getTasks());
     setPortalMessages(getPortalMessages());
     setSitePosts(getSitePosts());
+    setAiMemory(getAiMemory());
     hydrateFromHost().then(() => {
       setProjects(getProjects());
       setClients(getClients());
@@ -94,6 +100,7 @@ export default function App() {
       setTasks(getTasks());
       setPortalMessages(getPortalMessages());
       setSitePosts(getSitePosts());
+      setAiMemory(getAiMemory());
     });
     const localSettings = getSettings();
     setSettings(localSettings);
@@ -235,6 +242,11 @@ export default function App() {
     saveSitePosts(newPosts);
   };
 
+  const handleUpdateAiMemory = (newMemory) => {
+    setAiMemory(newMemory);
+    saveAiMemory(newMemory);
+  };
+
   const toggleTheme = () => {
     const themes = ['dark', 'light', 'ocean', 'forest', 'midnight'];
     const currentTheme = settings.theme || 'dark';
@@ -302,6 +314,13 @@ export default function App() {
           <SitePosts
             sitePosts={sitePosts}
             onSitePostsChange={handleUpdateSitePosts}
+          />
+        );
+      case 'ai-memory':
+        return (
+          <MemoryCenter
+            aiMemory={aiMemory}
+            onAiMemoryChange={handleUpdateAiMemory}
           />
         );
       case 'knowledge-base':
@@ -374,6 +393,7 @@ export default function App() {
             clients={clients}
             contacts={contacts}
             knowledgeBase={knowledgeBase}
+            aiMemory={aiMemory}
             catalog={catalog}
             tasks={tasks}
             settings={settings}
@@ -383,6 +403,7 @@ export default function App() {
             onClientsChange={handleUpdateClients}
             onCatalogChange={handleUpdateCatalog}
             onTasksChange={handleUpdateTasks}
+            onAiMemoryChange={handleUpdateAiMemory}
             setCurrentView={setCurrentView}
             setActiveProjectId={setActiveProjectId}
           />
@@ -472,6 +493,14 @@ export default function App() {
           >
             <MessageSquare size={18} />
             AI Voice Chat
+          </div>
+
+          <div
+            className={`menu-item ${currentView === 'ai-memory' ? 'active' : ''}`}
+            onClick={() => { setCurrentView('ai-memory'); setActiveProjectId(null); }}
+          >
+            <Brain size={18} />
+            AI Memory
           </div>
 
           <div

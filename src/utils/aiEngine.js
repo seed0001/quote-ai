@@ -34,7 +34,8 @@ export const SUPPORTED_ACTION_TYPES = [
   'CREATE_TASK', 'UPDATE_TASK', 'DELETE_TASK',
   'SEND_EMAIL_TO_CLIENT', 'SEND_SMS', 'SWITCH_VIEW',
   'WRITE_FILE', 'READ_FILE', 'RUN_COMMAND', 'SPAWN_SUBAGENT',
-  'CREATE_KNOWLEDGE_ARTICLE', 'UPDATE_KNOWLEDGE_ARTICLE', 'DELETE_KNOWLEDGE_ARTICLE'
+  'CREATE_KNOWLEDGE_ARTICLE', 'UPDATE_KNOWLEDGE_ARTICLE', 'DELETE_KNOWLEDGE_ARTICLE',
+  'SAVE_MEMORY', 'UPDATE_MEMORY', 'DELETE_MEMORY'
 ];
 
 const ACTION_TYPE_ALIASES = {
@@ -144,11 +145,14 @@ const ACTION_SCHEMA = `Available Actions Schema:
 - { "type": "SPAWN_SUBAGENT", "payload": { "role": string, "task": string } } — spins up a background AI sub-agent to assist with parallel coding or research.
 - { "type": "CREATE_KNOWLEDGE_ARTICLE", "payload": { "title": string, "content": string, "tags": [string] } } — use to store SOPs, rules, or workflows in your brain.
 - { "type": "UPDATE_KNOWLEDGE_ARTICLE", "payload": { "id": string, "title": string, "content": string, "tags": [string] } }
-- { "type": "DELETE_KNOWLEDGE_ARTICLE", "payload": { "id": string } }`;
+- { "type": "DELETE_KNOWLEDGE_ARTICLE", "payload": { "id": string } }
+- { "type": "SAVE_MEMORY", "payload": { "memoryType": "short"|"long"|"episodic", "content": string, "tags": [string] } } — write to your persistent memory (shown to you each turn as aiMemory). Use "long" for durable facts, user preferences, corrections, and standing rules — ALWAYS save a long memory when the user states a preference, corrects you, or sets a rule. Use "episodic" to journal a meaningful event: what happened, with whom, key decisions, and the outcome (e.g. after finishing a quote, a client call, or an important conversation). Use "short" for scratch notes that only matter for the next few days (short memories expire automatically after a week). One concise paragraph per memory; never duplicate an existing memory — update it instead.
+- { "type": "UPDATE_MEMORY", "payload": { "id": string, "content": string, "tags": [string] } } — revise an existing memory when facts change; include only the fields you are changing.
+- { "type": "DELETE_MEMORY", "payload": { "id": string } } — remove a memory that is wrong, obsolete, or that the user asks you to forget.`;
 
 // Build the compact DB snapshot the model reasons over. Mirrors the prior
 // inline context-builder so the model sees the same shape it always has.
-export function buildContext({ projects, clients, contacts = [], catalog, tasks = [], knowledgeBase = [], activeProjectId, currentView, settings = {} }) {
+export function buildContext({ projects, clients, contacts = [], catalog, tasks = [], knowledgeBase = [], aiMemory = [], activeProjectId, currentView, settings = {} }) {
   const clientsCtx = clients.map(c => ({
     id: c.id,
     name: c.name,
@@ -203,6 +207,17 @@ export function buildContext({ projects, clients, contacts = [], catalog, tasks 
 
   const activeProjectName = projects.find(p => p.id === activeProjectId)?.name || 'None';
 
+  // Your persistent memory. Long-term is always fully present; episodic and
+  // short-term are the most recent entries (newest last), so stale scratch
+  // notes age out of the prompt naturally.
+  const byNewest = (a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+  const memoryEntry = (m) => ({ id: m.id, content: m.content, tags: m.tags || [], saved: String(m.createdAt || '').slice(0, 10) });
+  const aiMemoryCtx = {
+    longTerm: aiMemory.filter(m => m.type === 'long').map(memoryEntry),
+    episodic: aiMemory.filter(m => m.type === 'episodic').sort(byNewest).slice(0, 15).reverse().map(memoryEntry),
+    shortTerm: aiMemory.filter(m => m.type === 'short').sort(byNewest).slice(0, 20).reverse().map(memoryEntry),
+  };
+
   return {
     businessProfile: {
       companyName: settings.companyName || 'My Business',
@@ -218,6 +233,7 @@ export function buildContext({ projects, clients, contacts = [], catalog, tasks 
     clients: clientsCtx,
     contacts, // pass entire contacts array since it's a general address book
     knowledgeBase, // SOPs and internal rules for the AI
+    aiMemory: aiMemoryCtx, // your persistent memory: consult before answering, maintain with SAVE/UPDATE/DELETE_MEMORY
     projects: projectsCtx,
     priceCatalog: catalogCtx,
     tasks: tasksCtx
@@ -534,7 +550,7 @@ async function callOpenRouter({ systemPrompt, history, userMessage, settings, cl
 // Reason why a single action is invalid, or null if it passes. `clientIds` and
 // `projectIds` are mutable sets seeded with existing ids and extended with ids
 // minted earlier in the same batch.
-function actionRejectionReason(action, clientIds, projectIds, catalogIds, taskIds, contactIds, knowledgeBaseIds) {
+function actionRejectionReason(action, clientIds, projectIds, catalogIds, taskIds, contactIds, knowledgeBaseIds, memoryIds) {
   if (!action || typeof action !== 'object') return 'malformed action';
   const { type, payload = {} } = action;
   const badCatalogRef = (cid) => cid !== undefined && cid !== '' && !catalogIds.has(cid);
@@ -632,6 +648,16 @@ function actionRejectionReason(action, clientIds, projectIds, catalogIds, taskId
       return payload.command ? null : 'RUN_COMMAND missing command';
     case 'SPAWN_SUBAGENT':
       return (payload.role && payload.task) ? null : 'SPAWN_SUBAGENT missing role or task';
+    case 'SAVE_MEMORY':
+      if (!payload.content) return 'SAVE_MEMORY missing content';
+      if (payload.memoryType !== undefined && !['short', 'long', 'episodic'].includes(payload.memoryType)) return `SAVE_MEMORY has invalid memoryType "${payload.memoryType}"`;
+      return null;
+    case 'UPDATE_MEMORY':
+      if (!memoryIds.has(payload.id)) return `UPDATE_MEMORY references unknown memory "${payload.id}"`;
+      if (payload.content === undefined && payload.tags === undefined) return 'UPDATE_MEMORY has nothing to change';
+      return null;
+    case 'DELETE_MEMORY':
+      return memoryIds.has(payload.id) ? null : `DELETE_MEMORY references unknown memory "${payload.id}"`;
     case 'CREATE_KNOWLEDGE_ARTICLE':
       return (payload.title && payload.content) ? null : 'CREATE_KNOWLEDGE_ARTICLE missing title or content';
     case 'UPDATE_KNOWLEDGE_ARTICLE':
@@ -687,10 +713,16 @@ export function validateActions(actions, context) {
   const taskIds = new Set((context.tasks || []).map(t => t.id));
   const contactIds = new Set((context.contacts || []).map(c => c.id));
   const knowledgeBaseIds = new Set((context.knowledgeBase || []).map(k => k.id));
+  // Memory ids come from the same context snapshot the model saw, so it can
+  // only update or delete memories that were actually in its prompt.
+  const memoryCtx = context.aiMemory || {};
+  const memoryIds = new Set(
+    [...(memoryCtx.longTerm || []), ...(memoryCtx.episodic || []), ...(memoryCtx.shortTerm || [])].map(m => m.id)
+  );
 
   for (const action of actions) {
     const normalizedAction = normalizeAction(action);
-    const reason = actionRejectionReason(normalizedAction, clientIds, projectIds, catalogIds, taskIds, contactIds, knowledgeBaseIds);
+    const reason = actionRejectionReason(normalizedAction, clientIds, projectIds, catalogIds, taskIds, contactIds, knowledgeBaseIds, memoryIds);
     if (reason) {
       rejected.push({ action: normalizedAction, originalAction: action, reason });
       continue;

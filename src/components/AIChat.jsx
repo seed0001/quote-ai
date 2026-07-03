@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Sparkles, Mic, MicOff, Send, Volume2, VolumeX, Database, Trash2, BrainCircuit, ChevronDown, Globe, Camera, X } from 'lucide-react';
-import { dispatchNLPActions } from '../utils/dataStore';
+import { dispatchNLPActions, appendShortTermMemory, getAiMemory } from '../utils/dataStore';
 import { runAgent, buildContext } from '../utils/aiEngine';
 import { generateFishSpeech } from '../utils/fishAudio';
 
@@ -21,6 +21,9 @@ export default function AIChat({
   mobile = false,
   projects,
   clients,
+  contacts = [],
+  knowledgeBase = [],
+  aiMemory = [],
   catalog,
   tasks,
   settings,
@@ -30,6 +33,7 @@ export default function AIChat({
   onClientsChange,
   onCatalogChange,
   onTasksChange,
+  onAiMemoryChange = () => {},
   setCurrentView,
   setActiveProjectId
 }) {
@@ -307,7 +311,7 @@ export default function AIChat({
         return { role: m.sender === 'user' ? 'user' : 'assistant', content };
       });
 
-    const context = buildContext({ projects, clients, catalog, tasks, activeProjectId, currentView, settings });
+    const context = buildContext({ projects, clients, contacts, knowledgeBase, aiMemory, catalog, tasks, activeProjectId, currentView, settings });
 
     setIsLoading(true);
     setLoadingPhase('reasoning');
@@ -347,9 +351,17 @@ export default function AIChat({
           setClients: onClientsChange,
           setCatalog: onCatalogChange,
           setTasks: onTasksChange,
+          setAiMemory: onAiMemoryChange,
           setCurrentView: () => {}, // Disable view switching in chat
           setActiveProjectId
         });
+
+        // Automatic short-term memory: a rolling trail of what was just done,
+        // so the next turns (and the Memory page) can see recent activity.
+        const actionSummary = safeActions.map(a => a.type).join(', ');
+        const userGist = typeof userMsg.text === 'string' ? userMsg.text.slice(0, 140) : 'image request';
+        appendShortTermMemory(`Did: ${actionSummary} — for: "${userGist}"`);
+        onAiMemoryChange(getAiMemory());
       }
 
       setMessages(prev => [...prev, {

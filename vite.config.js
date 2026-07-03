@@ -9,7 +9,7 @@ const HOST_CONFIG_FILE = path.resolve(process.cwd(), '.quote-flow-host-config.js
 // (local or over the tunnel) reads and writes these files, so the data never
 // lives in an individual browser.
 const DATA_DIR = path.resolve(process.cwd(), 'quote-flow-data')
-const DATA_COLLECTIONS = ['projects', 'clients', 'catalog', 'tasks', 'knowledgeBase', 'contacts', 'portalMessages', 'sitePosts']
+const DATA_COLLECTIONS = ['projects', 'clients', 'catalog', 'tasks', 'knowledgeBase', 'contacts', 'portalMessages', 'sitePosts', 'aiMemory']
 const PUBLIC_CONFIG_FIELDS = [
   'companyName',
   'businessType',

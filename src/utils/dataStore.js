@@ -13,6 +13,7 @@ const CONTACTS_KEY = 'quote_ai_contacts';
 const KNOWLEDGE_KEY = 'quote_ai_knowledge';
 const PORTAL_MESSAGES_KEY = 'quote_ai_portal_messages';
 const SITE_POSTS_KEY = 'quote_ai_site_posts';
+const AI_MEMORY_KEY = 'quote_ai_ai_memory';
 
 const DEFAULT_SETTINGS = {
   companyName: 'My Business',
@@ -60,8 +61,8 @@ const DEFAULT_SETTINGS = {
 // per-record POST/PUT/DELETE calls so two employees editing at once don't
 // clobber each other's records.
 // ---------------------------------------------------------------------------
-const cache = { projects: [], clients: [], catalog: [], tasks: [], contacts: [], knowledgeBase: [], portalMessages: [], sitePosts: [] };
-const LOCAL_KEYS = { projects: PROJECTS_KEY, clients: CLIENTS_KEY, catalog: CATALOG_KEY, tasks: TASKS_KEY, contacts: CONTACTS_KEY, knowledgeBase: KNOWLEDGE_KEY, portalMessages: PORTAL_MESSAGES_KEY, sitePosts: SITE_POSTS_KEY };
+const cache = { projects: [], clients: [], catalog: [], tasks: [], contacts: [], knowledgeBase: [], portalMessages: [], sitePosts: [], aiMemory: [] };
+const LOCAL_KEYS = { projects: PROJECTS_KEY, clients: CLIENTS_KEY, catalog: CATALOG_KEY, tasks: TASKS_KEY, contacts: CONTACTS_KEY, knowledgeBase: KNOWLEDGE_KEY, portalMessages: PORTAL_MESSAGES_KEY, sitePosts: SITE_POSTS_KEY, aiMemory: AI_MEMORY_KEY };
 
 const mirrorLocal = (name) => {
   try {
@@ -125,6 +126,7 @@ export const initDataStore = () => {
   cache.knowledgeBase = readLocal(KNOWLEDGE_KEY);
   cache.portalMessages = readLocal(PORTAL_MESSAGES_KEY);
   cache.sitePosts = readLocal(SITE_POSTS_KEY);
+  cache.aiMemory = readLocal(AI_MEMORY_KEY);
   if (!localStorage.getItem(SETTINGS_KEY)) {
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(DEFAULT_SETTINGS));
@@ -150,6 +152,7 @@ export const hydrateFromHost = async () => {
     cache.knowledgeBase = Array.isArray(data.knowledgeBase) ? data.knowledgeBase : [];
     cache.portalMessages = Array.isArray(data.portalMessages) ? data.portalMessages : [];
     cache.sitePosts = Array.isArray(data.sitePosts) ? data.sitePosts : [];
+    cache.aiMemory = Array.isArray(data.aiMemory) ? data.aiMemory : [];
     mirrorLocal('projects');
     mirrorLocal('clients');
     mirrorLocal('catalog');
@@ -158,6 +161,7 @@ export const hydrateFromHost = async () => {
     mirrorLocal('knowledgeBase');
     mirrorLocal('portalMessages');
     mirrorLocal('sitePosts');
+    mirrorLocal('aiMemory');
     return true;
   } catch (e) {
     console.error('Host unreachable — using local fallback data.', e);
@@ -182,6 +186,8 @@ export const getKnowledgeBase = () => cache.knowledgeBase;
 export const getPortalMessages = () => cache.portalMessages;
 
 export const getSitePosts = () => cache.sitePosts;
+
+export const getAiMemory = () => cache.aiMemory;
 
 export const getSettings = () => {
   try {
@@ -209,6 +215,7 @@ export const masterResetData = () => {
   cache.knowledgeBase = [];
   cache.portalMessages = [];
   cache.sitePosts = [];
+  cache.aiMemory = [];
   const appKeys = [];
   for (let index = 0; index < localStorage.length; index += 1) {
     const key = localStorage.key(index);
@@ -236,6 +243,42 @@ export const saveKnowledgeBase = (kb) => setCollection('knowledgeBase', kb);
 export const savePortalMessages = (messages) => setCollection('portalMessages', messages);
 
 export const saveSitePosts = (posts) => setCollection('sitePosts', posts);
+
+export const saveAiMemory = (memories) => setCollection('aiMemory', memories);
+
+export const MEMORY_TYPES = ['short', 'long', 'episodic'];
+
+export const newMemoryRecord = ({ type, content, tags = [], source = 'ai' }) => ({
+  id: `mem-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+  type: MEMORY_TYPES.includes(type) ? type : 'long',
+  content: String(content || '').slice(0, 4000),
+  tags: Array.isArray(tags) ? tags.map(String).slice(0, 8) : [],
+  source,
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+});
+
+// Short-term memory is a rolling scratchpad: newest first, capped, and
+// anything older than a week ages out automatically.
+const SHORT_TERM_CAP = 25;
+const SHORT_TERM_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+export const appendShortTermMemory = (content, source = 'system') => {
+  const cutoff = Date.now() - SHORT_TERM_MAX_AGE_MS;
+  const record = newMemoryRecord({ type: 'short', content, source });
+  const kept = getAiMemory().filter((m) => {
+    if (m.type !== 'short') return true;
+    const born = new Date(m.createdAt || 0).getTime();
+    return Number.isFinite(born) && born > cutoff;
+  });
+  const shorts = kept.filter((m) => m.type === 'short');
+  const overflow = shorts.length + 1 - SHORT_TERM_CAP;
+  const oldestShortIds = overflow > 0
+    ? new Set(shorts.slice(0, overflow).map((m) => m.id))
+    : new Set();
+  saveAiMemory([...kept.filter((m) => !oldestShortIds.has(m.id)), record]);
+  return record;
+};
 
 export const addTask = (task) => {
   const newTask = {
@@ -607,6 +650,29 @@ export const dispatchNLPActions = (actions, callbacks) => {
         addContact(payload);
         contacts = getContacts();
         callbacks.setContacts?.(contacts);
+        break;
+      }
+      case 'SAVE_MEMORY': {
+        const record = newMemoryRecord({ type: payload.memoryType, content: payload.content, tags: payload.tags, source: 'ai' });
+        saveAiMemory([...getAiMemory(), record]);
+        callbacks.setAiMemory?.(getAiMemory());
+        break;
+      }
+      case 'UPDATE_MEMORY': {
+        saveAiMemory(getAiMemory().map(m => m.id === payload.id
+          ? {
+              ...m,
+              content: payload.content !== undefined ? String(payload.content).slice(0, 4000) : m.content,
+              tags: Array.isArray(payload.tags) ? payload.tags.map(String).slice(0, 8) : m.tags,
+              updatedAt: new Date().toISOString(),
+            }
+          : m));
+        callbacks.setAiMemory?.(getAiMemory());
+        break;
+      }
+      case 'DELETE_MEMORY': {
+        saveAiMemory(getAiMemory().filter(m => m.id !== payload.id));
+        callbacks.setAiMemory?.(getAiMemory());
         break;
       }
       case 'UPDATE_CONTACT': {
