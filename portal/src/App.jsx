@@ -73,6 +73,7 @@ const CATEGORY_IMAGES = {
   Flooring: '/category-images/flooring.jpg',
   'Handyman / Home Repair': '/category-images/handyman-home-repair.jpg',
   'Lawn / Outdoor Equipment': '/category-images/lawn-outdoor-equipment.jpg',
+  'Media Production': '/category-images/media-production.jpg',
   'Minor Electrical Repairs': '/category-images/minor-electrical-repairs.jpg',
   'Minor Plumbing Repairs': '/category-images/minor-plumbing-repairs.jpg',
   'Mounting & Assembly': '/category-images/mounting-assembly.jpg',
