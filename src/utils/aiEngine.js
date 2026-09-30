@@ -9,15 +9,8 @@
 //   validated against the live database context. Invalid actions are dropped so
 //   they can never corrupt the local database.
 
-import { saveSettings } from './dataStore';
 
 const OPENROUTER_URL = '/api/openrouter/api/v1/chat/completions';
-
-// Safety-net model used only when the user's chosen model errors out (rate
-// limit, outage, retired slug). Must be a currently valid OpenRouter id — a
-// dead slug here breaks the whole self-healing path. Verify against
-// https://openrouter.ai/api/v1/models if models get retired.
-const FALLBACK_MODEL = 'meta-llama/llama-3.3-70b-instruct:free';
 
 const VALID_STATUSES = ['lead', 'quoting', 'scheduled', 'progress', 'completed'];
 const VALID_VIEWS = ['dashboard', 'clients', 'contacts', 'quote-builder', 'project-detail', 'settings', 'calendar', 'agent-workspace'];
@@ -498,46 +491,9 @@ async function callOpenRouter({ systemPrompt, history, userMessage, settings, cl
       ];
     }
 
-    let chatResult;
-    try {
-      chatResult = await postChat(messages, settings, true, activeClassifierModel);
-    } catch (err) {
-      const modelToFallBack = activeClassifierModel || settings.openRouterModel;
-      
-      // If ANY model error occurs (rate limits, not found, server error, etc.)
-      // and we are not already on the fallback model, automatically heal!
-      if (modelToFallBack !== FALLBACK_MODEL) {
-        console.warn(`Model ${modelToFallBack} failed with error: "${err.message}". Falling back to ${FALLBACK_MODEL}...`);
-
-        if (activeClassifierModel) {
-          settings.openRouterClassifierModel = FALLBACK_MODEL;
-          activeClassifierModel = FALLBACK_MODEL;
-        } else {
-          settings.openRouterModel = FALLBACK_MODEL;
-        }
-        if (settings.openRouterVisionModel) {
-          settings.openRouterVisionModel = FALLBACK_MODEL;
-        }
-        
-        try {
-          saveSettings(settings);
-          await fetch('/api/host-config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(settings),
-          }).catch(e => console.error("Failed to sync fallback config", e));
-        } catch (saveErr) {
-          console.error("Failed to save fallback settings", saveErr);
-        }
-        
-        attempt--; // Retry this attempt with the fallback model
-        isContinuation = false;
-        continue;
-      }
-      
-      // If we are already on the fallback model and it fails, throw the API error immediately
-      throw err;
-    }
+    // Always use the model the user picked. A failure surfaces the provider's
+    // real error; never swap models or rewrite saved settings.
+    const chatResult = await postChat(messages, settings, true, activeClassifierModel);
 
     const { content, finishReason } = chatResult;
     
