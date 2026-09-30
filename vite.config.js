@@ -3,12 +3,22 @@ import react from '@vitejs/plugin-react'
 import fs from 'node:fs'
 import path from 'node:path'
 import { exec } from 'node:child_process'
+import crypto from 'node:crypto'
 
-const HOST_CONFIG_FILE = path.resolve(process.cwd(), '.quote-flow-host-config.json')
+// Running on Railway (or any cloud host) instead of the owner's PC. The cloud
+// build has no Cloudflare header to lean on, so it is locked behind
+// APP_PASSWORD and the local-only agent endpoints are switched off.
+const IS_CLOUD = Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.QUOTE_AI_CLOUD)
+const APP_PASSWORD = process.env.APP_PASSWORD || ''
+
+// DATA_ROOT points at persistent storage (the Railway volume at /data). On the
+// PC it is unset and everything stays next to the project, as before.
+const DATA_ROOT = process.env.DATA_ROOT ? path.resolve(process.env.DATA_ROOT) : process.cwd()
+const HOST_CONFIG_FILE = path.resolve(DATA_ROOT, '.quote-flow-host-config.json')
 // Folder on THIS computer where all shared business data lives. Every employee
 // (local or over the tunnel) reads and writes these files, so the data never
 // lives in an individual browser.
-const DATA_DIR = path.resolve(process.cwd(), 'quote-flow-data')
+const DATA_DIR = path.resolve(DATA_ROOT, 'quote-flow-data')
 const DATA_COLLECTIONS = ['projects', 'clients', 'catalog', 'tasks', 'knowledgeBase', 'contacts', 'portalMessages', 'sitePosts', 'aiMemory']
 const PUBLIC_CONFIG_FIELDS = [
   'companyName',
@@ -43,6 +53,11 @@ const readHostConfig = () => {
   } catch {
     return {}
   }
+}
+
+const writeHostConfig = (config) => {
+  fs.mkdirSync(path.dirname(HOST_CONFIG_FILE), { recursive: true })
+  fs.writeFileSync(HOST_CONFIG_FILE, JSON.stringify(config, null, 2), 'utf8')
 }
 
 const publicHostConfig = () => {
@@ -568,10 +583,64 @@ const runPortalSync = async () => {
   }
 }
 
-const hostConfigPlugin = {
-  name: 'quote-flow-host-config',
-  configureServer(server) {
+const sha256 = (value) => crypto.createHash('sha256').update(String(value)).digest()
+
+const passwordMatches = (candidate) =>
+  crypto.timingSafeEqual(sha256(candidate), sha256(APP_PASSWORD))
+
+// The client portal carries its own per-client token, and the built JS/CSS
+// holds no secrets, so those stay reachable for clients without the team password.
+const isPublicPath = (pathname) =>
+  pathname === '/portal'
+  || pathname === '/portal/'
+  || pathname.startsWith('/api/portal/')
+  || pathname.startsWith('/assets/')
+  || pathname === '/favicon.svg'
+  || pathname === '/icons.svg'
+
+// HTTP Basic auth in front of the whole app when running in the cloud. The
+// browser remembers the login and sends it with every fetch, so the frontend
+// needs no changes. Any username works; only the password is checked.
+const requireAppPassword = (req, res, next) => {
+  if (!IS_CLOUD) return next()
+  const pathname = (req.url || '').split('?')[0]
+  if (isPublicPath(pathname)) return next()
+
+  if (!APP_PASSWORD) {
+    res.statusCode = 503
+    res.setHeader('Content-Type', 'text/plain')
+    res.end('QuoteFlow is locked: set the APP_PASSWORD variable on the server.')
+    return
+  }
+
+  const header = req.headers.authorization || ''
+  if (header.startsWith('Basic ')) {
+    const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8')
+    const password = decoded.slice(decoded.indexOf(':') + 1)
+    if (passwordMatches(password)) return next()
+  }
+
+  res.statusCode = 401
+  res.setHeader('WWW-Authenticate', 'Basic realm="QuoteFlow", charset="UTF-8"')
+  res.setHeader('Content-Type', 'text/plain')
+  res.end('Login required.')
+}
+
+const setupServer = (server) => {
     startReminderScheduler()
+    server.middlewares.use(requireAppPassword)
+
+    // The agent runtime runs shell commands and touches files on the host.
+    // That is only acceptable on the owner's own PC, never on a cloud server.
+    server.middlewares.use('/api/agent', (req, res, next) => {
+      const sub = (req.url || '').split('?')[0]
+      if (IS_CLOUD && (sub.startsWith('/fs') || sub.startsWith('/exec') || sub.startsWith('/spawn'))) {
+        sendJson(res, 403, { error: 'Agent runtime is disabled on the cloud server.' })
+        return
+      }
+      next()
+    })
+
     server.middlewares.use((req, res, next) => {
       const pathname = (req.url || '').split('?')[0]
       const allowed =
@@ -645,7 +714,7 @@ const hostConfigPlugin = {
           if (incoming.stripeKey) next.stripeKey = String(incoming.stripeKey).trim()
           if (incoming.portalSyncKey) next.portalSyncKey = String(incoming.portalSyncKey).trim()
           if (incoming.portalUrl !== undefined) next.portalUrl = String(incoming.portalUrl).trim().replace(/\/+$/, '')
-          fs.writeFileSync(HOST_CONFIG_FILE, JSON.stringify(next, null, 2), 'utf8')
+          writeHostConfig(next)
           sendJson(res, 200, publicHostConfig())
         } catch (error) {
           sendJson(res, 400, { error: error.message })
@@ -1305,7 +1374,14 @@ const hostConfigPlugin = {
         sendJson(res, 500, { error: error.message })
       }
     })
-  },
+}
+
+const hostConfigPlugin = {
+  name: 'quote-flow-host-config',
+  // `npm run dev` on the PC.
+  configureServer: setupServer,
+  // `npm start` on Railway: serves the production build with the same API.
+  configurePreviewServer: setupServer,
 }
 
 const injectHostKey = (configField) => (proxy) => {
@@ -1355,5 +1431,12 @@ export default defineConfig({
         configure: removeOrigin(),
       },
     },
+  },
+  // Production server on Railway. Proxy settings are inherited from `server`.
+  preview: {
+    host: '0.0.0.0',
+    port: Number(process.env.PORT) || 4173,
+    strictPort: true,
+    allowedHosts: true,
   },
 })
