@@ -699,7 +699,7 @@ async function webSearch(queries) {
     try {
       const isUrl = /^https?:\/\//i.test(query);
       if (isUrl) {
-        const response = await fetch(`/api/agent/url?url=${encodeURIComponent(query)}`);
+        const response = await fetch(`/api/agent/url?url=${encodeURIComponent(query)}`, { cache: 'no-store' });
         const data = await response.json().catch(() => ({}));
         found.push({
           query,
@@ -707,7 +707,7 @@ async function webSearch(queries) {
           error: response.ok ? null : (data.error || `fetch failed (${response.status})`)
         });
       } else {
-        const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+        const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`, { cache: 'no-store' });
         const data = await response.json().catch(() => ({}));
         found.push({
           query,

@@ -20,7 +20,7 @@ export async function fetchAllFishVoices(apiKey, onProgress) {
     url.searchParams.set('page_number', String(pageNumber));
     url.searchParams.set('sort_by', 'task_count');
 
-    const response = await fetch(url, { headers: authHeaders(apiKey) });
+    const response = await fetch(url, { cache: 'no-store', headers: authHeaders(apiKey) });
     if (!response.ok) {
       const detail = await response.json().catch(() => ({}));
       throw new Error(detail.message || `Fish Audio voice request failed (${response.status}).`);

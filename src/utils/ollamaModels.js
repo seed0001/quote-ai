@@ -3,6 +3,7 @@ const OLLAMA_MODELS_URL = '/api/ollama/api/tags';
 export async function fetchOllamaModels() {
   try {
     const response = await fetch(OLLAMA_MODELS_URL, {
+      cache: 'no-store',
       headers: {
         'Content-Type': 'application/json',
       },

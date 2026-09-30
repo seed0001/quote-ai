@@ -630,6 +630,12 @@ const setupServer = (server) => {
     startReminderScheduler()
     server.middlewares.use(requireAppPassword)
 
+    // API answers are live data; browsers must never cache them.
+    server.middlewares.use('/api', (req, res, next) => {
+      res.setHeader('Cache-Control', 'no-store')
+      next()
+    })
+
     // The agent runtime runs shell commands and touches files on the host.
     // That is only acceptable on the owner's own PC, never on a cloud server.
     server.middlewares.use('/api/agent', (req, res, next) => {
