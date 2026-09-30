@@ -105,16 +105,21 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
     setOpenRouterLoading(true);
     setOpenRouterStatus('Checking your model access...');
     try {
-      const openRouterPromise = (key || settings.openRouterConfigured) ? fetchOpenRouterModels(key) : Promise.resolve([]);
-      const ollamaPromise = fetchOllamaModels();
-      
-      const [orModels, olModels] = await Promise.all([
-        openRouterPromise.catch((e) => { console.warn(e); return []; }),
-        ollamaPromise
+      // The model list is public, so always fetch it; a missing key only
+      // matters when chatting. Ollama is optional and must never block it.
+      let orError = '';
+      const orModels = await fetchOpenRouterModels(key).catch((e) => { orError = e.message; return []; });
+      setOpenRouterModels(orModels);
+      setOpenRouterStatus(orError || `Loaded ${orModels.length} cloud models.`);
+
+      const olModels = await Promise.race([
+        fetchOllamaModels(),
+        new Promise((resolve) => setTimeout(() => resolve([]), 4000)),
       ]);
-      const models = [...orModels, ...olModels];
-      setOpenRouterModels(models);
-      setOpenRouterStatus(`Loaded ${orModels.length} cloud models and ${olModels.length} local models.`);
+      if (olModels.length) {
+        setOpenRouterModels([...orModels, ...olModels]);
+        setOpenRouterStatus(`${orError || `Loaded ${orModels.length} cloud models`} and ${olModels.length} local models.`);
+      }
     } catch (error) {
       setOpenRouterModels([]);
       setOpenRouterStatus(error.message);
@@ -823,6 +828,11 @@ export default function SettingsView({ settings, onSettingsChange, onDataImporte
               <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '4px' }}>
                 Entering a key automatically loads the models available under that account.
               </div>
+              {openRouterStatus && (
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  {openRouterStatus}
+                </div>
+              )}
             </div>
 
             <div className="form-group">

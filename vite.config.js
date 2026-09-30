@@ -641,6 +641,12 @@ const setupServer = (server) => {
       next()
     })
 
+    // There is no Ollama on a cloud server; answer instantly with no models
+    // instead of letting the proxy hang on a dead localhost port.
+    if (IS_CLOUD) {
+      server.middlewares.use('/api/ollama', (req, res) => sendJson(res, 200, { models: [] }))
+    }
+
     server.middlewares.use((req, res, next) => {
       const pathname = (req.url || '').split('?')[0]
       const allowed =
